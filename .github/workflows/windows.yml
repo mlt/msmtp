@@ -32,6 +32,15 @@ jobs:
         make install-strip DESTDIR=/d/a/msmtp/tmp
         cd /d/a/_temp/msys64/ucrt64/bin
         cp libiconv-2.dll libidn2-0.dll libintl-8.dll liblibrecrypto-46.dll liblibressl-48.dll libunistring-5.dll libwinpthread-1.dll /d/a/msmtp/tmp/bin/
+    - name: Upload release to GitHub
+      if: github.ref_type == 'tag'
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        7z a msmtp.zip D:\a\msmtp\tmp\*
+        gh release create ${{ github.ref_name }} --generate-notes || echo "Release already exists!"
+        gh release upload ${{ github.ref_name }} msmtp.zip
     - name: Artifacts
       uses: actions/upload-artifact@v4
       with:
