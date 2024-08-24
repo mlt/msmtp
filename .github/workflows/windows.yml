@@ -27,11 +27,10 @@ jobs:
     - name: Build
       run: |
         autoreconf -i
-        ./configure --with-tls=libressl --with-libidn --prefix=/
+        ./configure --with-tls=libressl --with-libidn --prefix=/ --localedir=../share/locale
         make
         make install-strip DESTDIR=/d/a/msmtp/tmp
-        cd /d/a/_temp/msys64/ucrt64/bin
-        cp libiconv-2.dll libidn2-0.dll libintl-8.dll liblibrecrypto-46.dll liblibressl-48.dll libunistring-5.dll libwinpthread-1.dll /d/a/msmtp/tmp/bin/
+        cp `ldd src/msmtp | awk '/\/ucrt64/ {print $3}' | uniq` /d/a/msmtp/tmp/bin/
     - name: Upload release to GitHub
       if: github.ref_type == 'tag'
       shell: pwsh
