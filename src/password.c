@@ -193,10 +193,10 @@ char *password_get(const char *hostname, const char *user,
              * 'console' and not stdin. On other systems, we test if /dev/tty can be
              * opened before calling getpass(). */
             int getpass_uses_tty;
-            FILE *tty;
 #if defined W32_NATIVE || defined __CYGWIN__
             getpass_uses_tty = 1;
 #else
+            FILE* tty;
             getpass_uses_tty = 0;
             if ((tty = fopen("/dev/tty", "w+")))
             {
