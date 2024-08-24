@@ -33,3 +33,7 @@ src/*.obj
 src/msmtp
 src/msmtp.exe
 stamp-h1
+msvc/vcpkg_installed
+msvc/objs
+msvc/bin
+msvc/.vs
