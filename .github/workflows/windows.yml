@@ -27,7 +27,7 @@ jobs:
     - name: Build
       run: |
         autoreconf -i
-        ./configure --with-tls=openssl --with-libidn --prefix=/ libssl_CFLAGS=-I/ucrt64/include/libressl "libssl_LIBS=-llibressl -L@prefix/lib -llibrecrypto" "CFLAGS=-Wno-incompatible-pointer-types -DNOCRYPT"
+        ./configure --with-tls=libressl --with-libidn --prefix=/
         make
         make install-strip DESTDIR=/d/a/msmtp/tmp
         cd /d/a/_temp/msys64/ucrt64/bin
