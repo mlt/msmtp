@@ -234,7 +234,11 @@ int link(const char *path1, const char *path2)
 # if W32_NATIVE
 char *getpass(const char *prompt)
 {
+#if defined(_MSC_VER) && defined(__STDC_NO_VLA__)
+# define pass_max 512
+#else
     const size_t pass_max = 512;
+#endif
     char getpassbuf[pass_max + 1];
     size_t i = 0;
     int c;

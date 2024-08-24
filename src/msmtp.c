@@ -35,8 +35,10 @@
 #include <errno.h>
 #include <time.h>
 #include <getopt.h>
+#ifndef _MSC_VER
 extern char *optarg;
 extern int optind;
+#endif
 #include <unistd.h>
 #include <fcntl.h>
 #ifdef ENABLE_NLS
