@@ -35,8 +35,10 @@
 #include <errno.h>
 #include <time.h>
 #include <getopt.h>
+#ifndef _MSC_VER
 extern char *optarg;
 extern int optind;
+#endif
 #include <unistd.h>
 #include <fcntl.h>
 #ifdef ENABLE_NLS
@@ -70,6 +72,7 @@ extern int optind;
 #ifdef W32_NATIVE
 #define SYSCONFFILE     "msmtprc.txt"
 #define USERCONFFILE    "msmtprc.txt"
+#include <io.h>
 #else /* UNIX */
 #define SYSCONFFILE     "msmtprc"
 #define USERCONFFILE    ".msmtprc"
@@ -3803,7 +3806,7 @@ int main(int argc, char *argv[])
 
     /* Avoid the side effects of text mode interpretations on DOS systems. */
 #if defined W32_NATIVE
-    setmode(fileno(stdin), O_BINARY);
+    (void)_setmode(_fileno(stdin), O_BINARY);
     _fmode = O_BINARY;
 #endif
 
