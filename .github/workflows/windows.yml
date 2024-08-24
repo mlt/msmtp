@@ -3,7 +3,7 @@ name: Windows build
 on: [push, pull_request]
 
 jobs:
-  build:
+  mingw_build:
     runs-on: windows-latest
     defaults:
       run:
@@ -44,5 +44,23 @@ jobs:
     - name: Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: msmtp
+        name: msmtp-ucrt64
         path: D:\a\msmtp\tmp\
+
+  msvc_build:
+    runs-on: windows-latest
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+    - uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
+    - name: Build
+      run: |
+        vcpkg integrate install
+        cd msvc && msbuild msmtp.vcxproj -t:rebuild -verbosity:minimal -property:Configuration=Release -property:Platform=x64
+    - name: Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: msmtp-msvc
+        path: msvc\bin\Release
