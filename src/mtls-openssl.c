@@ -34,6 +34,9 @@
 #include <time.h>
 #include <errno.h>
 
+#ifdef W32_NATIVE
+# define NOCRYPT
+#endif
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
