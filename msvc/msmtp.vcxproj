@@ -11,6 +11,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{28c386a7-8c72-4e97-8382-1df69f82b532}</ProjectGuid>
