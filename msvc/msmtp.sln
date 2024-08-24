@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.10.35201.131
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "msmtp", "msmtp.vcxproj", "{28C386A7-8C72-4E97-8382-1DF69F82B532}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{28C386A7-8C72-4E97-8382-1DF69F82B532}.Debug|x64.ActiveCfg = Debug|x64
+		{28C386A7-8C72-4E97-8382-1DF69F82B532}.Debug|x64.Build.0 = Debug|x64
+		{28C386A7-8C72-4E97-8382-1DF69F82B532}.Release|x64.ActiveCfg = Release|x64
+		{28C386A7-8C72-4E97-8382-1DF69F82B532}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F105BF84-B420-4003-ADFE-7015D32FCAEA}
+	EndGlobalSection
+EndGlobal

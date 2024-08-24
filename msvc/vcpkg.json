@@ -1,0 +1,12 @@
+{
+  "dependencies": [
+    {
+      "name": "libidn2",
+      "features": [
+        "nls"
+      ]
+    },
+    "wolfssl",
+    "getopt"
+  ]
+}
