@@ -97,31 +97,33 @@ want_libtls="no"
 tls_CFLAGS=""
 tls_LIBS=""
 with_ssl_was_used=no
-AC_ARG_WITH([tls], [AS_HELP_STRING([--with-tls=[gnutls|openssl|libtls|no]],
-    [TLS support: GnuTLS (default), OpenSSL (discouraged), libtls, or none.])],
-    if test "$withval" = "gnutls"; then
+AC_ARG_WITH([tls], [AS_HELP_STRING([--with-tls=[gnutls|openssl|libressl|libtls|no]],
+    [TLS support: GnuTLS (default), OpenSSL (discouraged), LibreSSL, libtls, or none.])],
+    AS_CASE([$withval],
+    [gnutls], [
 	want_tls=yes
 	want_gnutls=yes
 	want_openssl=no
 	want_libtls=no
-    elif test "$withval" = "openssl"; then
+    ], [openssl|libressl], [
 	want_tls=yes
 	want_gnutls=no
-	want_openssl=yes
+	want_openssl=$withval
 	want_libtls=no
-    elif test "$withval" = "libtls"; then
+    ], [libtls], [
 	want_tls=yes
 	want_gnutls=no
 	want_openssl=no
 	want_libtls=yes
-    elif test "$withval" = "no"; then
+    ], [no], [
 	want_tls=no
 	want_gnutls=no
 	want_openssl=no
 	want_libtls=no
-    else
-	AC_MSG_ERROR([Use --with-tls=gnutls or --with-tls=openssl or --with-tls=libtls or --with-tls=no])
-    fi)
+    ],
+        [AC_MSG_ERROR([Invalid --with-tls=$withval. Use --with-tls=gnutls|openssl|libressl|libtls|no])]
+    )
+)
 if test "$want_gnutls" = "yes"; then
     PKG_CHECK_MODULES([libgnutls], [gnutls >= 3.7.2], [HAVE_LIBGNUTLS=1], [HAVE_LIBGNUTLS=0])
     if test "$HAVE_LIBGNUTLS" != "1"; then
@@ -136,16 +138,20 @@ if test "$want_gnutls" = "yes"; then
 	AC_DEFINE([HAVE_LIBGNUTLS], [1], [Define to 1 if libgnutls is available])
     fi
 fi
-if test "$want_openssl" = "yes" -a "$have_tls" = "no"; then
-    AC_MSG_WARN([Using OpenSSL is discouraged; consider using GnuTLS instead])
-    PKG_CHECK_MODULES([libssl], [openssl >= 0.0], [HAVE_LIBSSL=1], [HAVE_LIBSSL=0])
+if test "$want_openssl" != "no" -a "$have_tls" = "no"; then
+    tls_lib="LibreSSL"
+    if test "$want_openssl" == "openssl"; then
+        AC_MSG_WARN([Using OpenSSL is discouraged; consider using GnuTLS instead])
+	tls_lib="OpenSSL"
+    fi
+    PKG_CHECK_MODULES([libssl], [$want_openssl >= 0.0], [HAVE_LIBSSL=1], [HAVE_LIBSSL=0])
     if test "$HAVE_LIBSSL" != "1"; then
 	AC_MSG_WARN([library libssl not found:])
 	AC_MSG_WARN([$libssl_PKG_ERRORS])
-	AC_MSG_WARN([libssl is provided by OpenSSL])
+	AC_MSG_WARN([libssl is provided by $tls_lib])
+        $tls_lib="none"
     else
 	have_tls="yes"
-	tls_lib="OpenSSL"
 	tls_CFLAGS="$libssl_CFLAGS"
 	tls_LIBS="$libssl_LIBS"
 	AC_DEFINE([HAVE_LIBSSL], [1], [Define to 1 if libssl is available])
@@ -170,9 +176,10 @@ if test "$have_tls" = "yes"; then
 elif test "$want_tls" = "yes"; then
     AC_MSG_WARN([Disabling TLS support, which is very bad. Consider using GnuTLS!])
 fi
+AC_DEFINE_UNQUOTED([TLS_LIB], ["$tls_lib"], [TLS library used])
 AM_CONDITIONAL([HAVE_TLS], [test "$have_tls" = "yes"])
 AM_CONDITIONAL([HAVE_GNUTLS], [test "$tls_lib" = "GnuTLS"])
-AM_CONDITIONAL([HAVE_OPENSSL], [test "$tls_lib" = "OpenSSL"])
+AM_CONDITIONAL([HAVE_OPENSSL], [AS_CASE([$tls_lib], [OpenSSL|LibreSSL], [true], [false])])
 AM_CONDITIONAL([HAVE_LIBTLS], [test "$tls_lib" = "libtls"])
 AC_SUBST([tls_CFLAGS])
 AC_SUBST([tls_LIBS])
