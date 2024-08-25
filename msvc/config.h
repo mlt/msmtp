@@ -1,6 +1,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#define W32_NATIVE 1
+
 #define popen _popen
 #define pclose _pclose
 #define strdup _strdup
@@ -12,11 +14,13 @@
 #define PACKAGE_BUGREPORT "marlam@marlam.de"
 
 #define HAVE_LIBSSL
-#define HAVE_LIBIDN
-#define ENABLE_NLS 1
-#define LOCALEDIR "../locale"
-#define TLS_LIB "WolfSSL"
-#define OPENSSL_EXTRA
-#define OPENSSL_VERSION_NUMBER 0x10100000L
+#define HAVE_TLS
+//#define HAVE_LIBIDN
+//#define ENABLE_NLS 1
+//#define LOCALEDIR "../locale"
+#define TLS_LIB "Schannel"
+//#define TLS_LIB "WolfSSL"
+//#define OPENSSL_EXTRA
+//#define OPENSSL_VERSION_NUMBER 0x10100000L
 
 #endif

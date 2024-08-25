@@ -39,7 +39,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <sys/time.h>
+#ifndef _MSC_VER
+# include <sys/time.h>
+#endif
 #ifdef HAVE_SYS_SELECT_H
 # include <sys/select.h>
 #endif

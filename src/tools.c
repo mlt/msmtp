@@ -467,6 +467,12 @@ char *get_hostname(void)
 
 char *get_userconfig(const char *userconfigfile)
 {
+//#if defined(W32_NATIVE)
+//     // TODO: move into the code below as a fallback
+//    /* Make it portable and check for config in the current folder */
+//    if (_access(userconfigfile, 4) != -1)
+//        return xstrdup(userconfigfile);
+//#endif
     char *homedir = get_homedir();
     char *path = get_filename(homedir, userconfigfile);
 

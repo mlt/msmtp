@@ -17,11 +17,16 @@
     <RootNamespace>msmtp</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
+  <PropertyGroup Label="UserMacros">
+    <HAVE_LIBSSL Condition="$(HAVE_LIBSSL)==''">
+    </HAVE_LIBSSL>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -52,12 +57,15 @@
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
   </PropertyGroup>
-  <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" />
+  <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <VcpkgUseStatic>true</VcpkgUseStatic>
+  </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>HAVE_CONFIG_H;W32_NATIVE;_CRT_SECURE_NO_WARNINGS;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>HAVE_CONFIG_H;_CRT_SECURE_NO_WARNINGS;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="$(HAVE_LIBSSL)!=''">HAVE_LIBSSL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>.;vcpkg_installed\$(VcpkgTriplet)\$(VcpkgTriplet)\include\wolfssl</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
@@ -67,7 +75,14 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>Ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <IgnoreSpecificDefaultLibraries>LIBCMTD</IgnoreSpecificDefaultLibraries>
     </Link>
+    <Manifest />
+    <Manifest />
+    <Manifest>
+      <AdditionalManifestFiles>
+      </AdditionalManifestFiles>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -76,6 +91,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>HAVE_CONFIG_H;W32_NATIVE;_CRT_SECURE_NO_WARNINGS;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="$(HAVE_LIBSSL)!=''">HAVE_LIBSSL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>.;vcpkg_installed\$(VcpkgTriplet)\$(VcpkgTriplet)\include\wolfssl</AdditionalIncludeDirectories>
       <LanguageStandard_C>stdc11</LanguageStandard_C>
@@ -98,7 +114,8 @@
     <ClCompile Include="..\src\md5.c" />
     <ClCompile Include="..\src\msgid.c" />
     <ClCompile Include="..\src\msmtp.c" />
-    <ClCompile Include="..\src\mtls-openssl.c" />
+    <ClCompile Condition="$(HAVE_LIBSSL)!=''" Include="..\src\mtls-openssl.c" />
+    <ClCompile Include="..\src\mtls-sspi.c" />
     <ClCompile Include="..\src\mtls.c" />
     <ClCompile Include="..\src\net.c" />
     <ClCompile Include="..\src\netrc.c" />
@@ -110,6 +127,7 @@
     <ClCompile Include="..\src\xalloc.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="idn2.h" />
     <ClInclude Include="sys\time.h" />
     <ClInclude Include="..\src\aliases.h" />
     <ClInclude Include="..\src\base64.h" />
