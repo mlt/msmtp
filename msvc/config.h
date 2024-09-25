@@ -15,6 +15,7 @@
 
 #define HAVE_LIBSSL
 #define HAVE_TLS
+#define USE_CREDMAN
 //#define HAVE_LIBIDN
 //#define ENABLE_NLS 1
 //#define LOCALEDIR "../locale"

@@ -1752,6 +1752,10 @@ int msmtp_configure(const char *address, const char *conffile)
     printf("# - %s\n#   %s\n", _("add your password to the key ring:"), tmpstr);
     free(tmpstr);
 #elif defined USE_CREDMAN
+    //printf("# - You will be prompted for the password on the first run with a standard dialog.\n"
+    //    "#   Leave user name prefix as is. It is not important. Only one password per host can be saved."
+    //    "#   You can find the entry in Credential Manager prefixed with " PACKAGE_NAME "_\n"
+    //    "#   control /name Microsoft.CredentialManager\n");
     tmpstr = xasprintf("cmdkey /add:" PACKAGE_NAME "_%s /user:%s /pass", hostname, address);
     printf("# - %s\n#   %s\n", _("add your password to the key ring:"), tmpstr);
     free(tmpstr);
