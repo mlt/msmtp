@@ -153,121 +153,6 @@ int mtls_lib_init(char **errstr)
 
 
 /*
- * asn1time_to_time_t() [OpenSSL only]
- *
- * Convert a ASN1 time string ([YY]YYMMDDhhmm[ss](Z)) into a time_t.
- * The flag 'is_utc' indicates whether the string is in UTC or GENERALIZED
- * format. GENERALIZED means a 4 digit year.
- * In case of invalid strings or over-/underflows, 1 is returned, and the value
- * of 't' is undefined. On success, 0 is returned.
- *
- * This code uses many ideas from GnuTLS code (lib/x509/common.c).
- * The transformation of struct tm to time_t is based on code from Russ Allbery
- * (rra@stanford.edu), who wrote a mktime_utc function and placed it under
- * public domain.
- */
-
-static int is_leap(int year)
-{
-    return (((year) % 4) == 0 && (((year) % 100) != 0 || ((year) % 400) == 0));
-}
-
-static int asn1time_to_time_t(const char *asn1time, int is_utc, time_t *t)
-{
-    size_t len;
-    int i;
-    size_t j;
-    const char *p;
-    char xx[3];
-    char xxxx[5];
-    const int monthdays[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
-    struct tm tm;
-
-    len = strlen(asn1time);
-    if ((is_utc && len < 10) || (!is_utc && len < 12))
-    {
-        goto error_exit;
-    }
-    for (j = 0; j < len - 1; j++)
-    {
-        if (!isdigit((unsigned char)asn1time[j]))
-        {
-            goto error_exit;
-        }
-    }
-
-    xx[2] = '\0';
-    xxxx[4] = '\0';
-    p = asn1time;
-    if (is_utc)
-    {
-        strncpy(xx, p, 2);
-        tm.tm_year = atoi(xx);
-        tm.tm_year += (tm.tm_year > 49) ? 1900 : 2000;
-        p += 2;
-    }
-    else
-    {
-        strncpy(xxxx, p, 4);
-        tm.tm_year = atoi(xxxx);
-        p += 4;
-    }
-    strncpy(xx, p, 2);
-    tm.tm_mon = atoi(xx) - 1;
-    p += 2;
-    strncpy(xx, p, 2);
-    tm.tm_mday = atoi(xx);
-    p += 2;
-    strncpy(xx, p, 2);
-    tm.tm_hour = atoi(xx);
-    p += 2;
-    strncpy(xx, p, 2);
-    tm.tm_min = atoi(xx);
-    p += 2;
-    if (isdigit((unsigned char)(*p)))
-    {
-        strncpy(xx, p, 2);
-        tm.tm_sec = atoi(xx);
-    }
-    else
-    {
-        tm.tm_sec = 0;
-    }
-
-    /* basic check for 32 bit time_t overflows. */
-    if (sizeof(time_t) <= 4 && tm.tm_year >= 2038)
-    {
-        goto error_exit;
-    }
-    if (tm.tm_year < 1970 || tm.tm_mon < 0 || tm.tm_mon > 11)
-    {
-        goto error_exit;
-    }
-    *t = 0;
-    for (i = 1970; i < tm.tm_year; i++)
-    {
-        *t += 365 + (is_leap(i) ? 1 : 0);
-    }
-    for (i = 0; i < tm.tm_mon; i++)
-    {
-        *t += monthdays[i];
-    }
-    if (tm.tm_mon > 1 && is_leap(tm.tm_year))
-    {
-        *t += 1;
-    }
-    *t = 24 * (*t + tm.tm_mday - 1) + tm.tm_hour;
-    *t = 60 * (*t) + tm.tm_min;
-    *t = 60 * (*t) + tm.tm_sec;
-
-    return 0;
-
-error_exit:
-    return 1;
-}
-
-
-/*
  * mtls_cert_info_get()
  *
  * see mtls.h
@@ -279,6 +164,7 @@ int mtls_cert_info_get(mtls_t *mtls, mtls_cert_info_t *mtci, char **errstr)
     X509_NAME *x509_subject;
     X509_NAME *x509_issuer;
     const ASN1_TIME *asn1time;
+    struct tm time;
     unsigned int usize;
     const char *errmsg;
 
@@ -315,25 +201,23 @@ int mtls_cert_info_get(mtls_t *mtls, mtls_cert_info_t *mtci, char **errstr)
         return TLS_ECERT;
     }
     asn1time = X509_get0_notBefore(x509cert);
-    if (asn1time_to_time_t((const char *)asn1time->data,
-                (asn1time->type != V_ASN1_GENERALIZEDTIME),
-                &(mtci->activation_time)) != 0)
+    if (ASN1_TIME_to_tm(asn1time, &time) == 0)
     {
         *errstr = xasprintf(_("%s: cannot get activation time"), errmsg);
         X509_free(x509cert);
         mtls_cert_info_free(mtci);
         return TLS_ECERT;
     }
+    mtci->activation_time = mktime(&time);
     asn1time = X509_get0_notAfter(x509cert);
-    if (asn1time_to_time_t((const char *)asn1time->data,
-                (asn1time->type != V_ASN1_GENERALIZEDTIME),
-                &(mtci->expiration_time)) != 0)
+    if (ASN1_TIME_to_tm(asn1time, &time) == 0)
     {
         *errstr = xasprintf(_("%s: cannot get expiration time"), errmsg);
         X509_free(x509cert);
         mtls_cert_info_free(mtci);
         return TLS_ECERT;
     }
+    mtci->expiration_time = mktime(&time);
 
     /* subject information */
     mtci->subject_info = X509_NAME_oneline(x509_subject, NULL, 0);
