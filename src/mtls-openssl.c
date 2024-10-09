@@ -392,7 +392,7 @@ int mtls_init(mtls_t *mtls,
     SSL_set_verify(mtls->internals->ssl, no_certcheck ? SSL_VERIFY_NONE : SSL_VERIFY_PEER, NULL);// ssl_check_cert);
     // SSL_get_verify_result returns X509_V_OK for some reason
     /* Enable automatic hostname checks */
-    param = SSL_CTX_get0_param(mtls->internals->ssl_ctx);
+    param = SSL_get0_param(mtls->internals->ssl);
     // has no effect??
     X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
     int success = X509_VERIFY_PARAM_set1_host(param, mtls->hostname, 0);
