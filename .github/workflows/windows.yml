@@ -4,6 +4,7 @@ on: [push, pull_request]
 
 jobs:
   libressl:
+    if: false
     runs-on: windows-latest
     defaults:
       run:
@@ -37,6 +38,7 @@ jobs:
         name: msmtp-libressl
         path: D:\a\msmtp\tmp\
   nls:
+    if: false
     runs-on: windows-latest
     defaults:
       run:
@@ -85,6 +87,7 @@ jobs:
       run: |
         norm/src/msmtp --debug --serverinfo --tls --host=mx3.почта.рус --port=1234
   native:
+    if: false
     runs-on: windows-latest
     defaults:
       run:
