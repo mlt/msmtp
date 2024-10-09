@@ -1,0 +1,46 @@
+name: OpenSSL
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+    - name: Set up Homebrew
+      id: set-up-homebrew
+      uses: Homebrew/actions/setup-homebrew@master
+    - name: Install Homebrew dependencies
+      run: |
+        env HOMEBREW_NO_AUTO_UPDATE=1 brew install openssl gcc autoconf automake libidn2 gettext texinfo pkg-config
+    - name: Build
+      run: |
+        autoreconf -i
+        ./configure --with-tls=openssl --with-libidn
+        make
+    - name: Test expired
+      continue-on-error: true
+      run: ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=expired.badssl.com
+    - name: Test wrong host
+      continue-on-error: true
+      run: ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=wrong.host.badssl.com
+    - name: Test revoked
+      continue-on-error: true
+      run: ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=revoked.badssl.com
+    - name: Test wrong host name on GMX
+      continue-on-error: true
+      run: |
+        # ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmx.com --tls-certcheck=off
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmx.com --tls-host-override=mail.gmx.com
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmx.com
+    - name: Test SNI
+      continue-on-error: true
+      run: |
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmail.com # <- normal
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=imap.gmail.com # <- won't work without SSL_set_tlsext_host_name
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=imap.gmail.com --tls-host-override=smtp.gmail.com
