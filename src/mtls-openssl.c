@@ -25,37 +25,28 @@
 # include "config.h"
 #endif
 
-#include <stdio.h>
-#include <string.h>
-#include <strings.h>
-#include <ctype.h>
-#include <stdlib.h>
-#include <limits.h>
-#include <time.h>
-#include <errno.h>
-
 #include <openssl/ssl.h>
-#include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
-#include <openssl/rand.h>
-#include <openssl/evp.h>
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-#define X509_get0_notBefore X509_get_notBefore
-#define X509_get0_notAfter X509_get_notAfter
+#if OPENSSL_VERSION_NUMBER < 0x30300010
+# error OpenSSL is too old
 #endif
 
 #ifdef HAVE_LIBIDN
 # include <idn2.h>
 #endif
+#ifdef W32_NATIVE
+# include <io.h>
+#else
+# include <unistd.h>
+#endif
+#include <assert.h>
 
 #include "gettext.h"
 #define _(string) gettext(string)
 #define N_(string) gettext_noop(string)
 
 #include "xalloc.h"
-#include "readbuf.h"
-#include "tools.h"
 #include "mtls.h"
 
 
@@ -66,69 +57,6 @@ struct mtls_internals_t
 };
 
 
-
-/*
- * seed_prng()
- *
- * Seeds the OpenSSL random number generator.
- * Used error codes: TLS_ESEED
- */
-
-static int seed_prng(char **errstr)
-{
-    char randfile[512];
-    time_t t;
-    int prn;
-    int system_prn_max = 1024;
-
-    /* Most systems have /dev/random or other sources of random numbers that
-     * OpenSSL can use to seed itself.
-     * The only system I know of where we must seed the PRNG is DOS.
-     */
-    if (!RAND_status())
-    {
-        if (!RAND_file_name(randfile, 512))
-        {
-            *errstr = xasprintf(_("no environment variables RANDFILE or HOME, "
-                        "or filename of rand file too long"));
-            return TLS_ESEED;
-        }
-        if (RAND_load_file(randfile, -1) < 1)
-        {
-            *errstr = xasprintf(_("%s: input error"), randfile);
-            return TLS_ESEED;
-        }
-        /* Seed in time. I can't think of other "random" things on DOS
-         * systems. */
-        t = time(NULL);
-        RAND_seed((unsigned char *)&t, sizeof(time_t));
-        /* If the RANDFILE + time is not enough, we fall back to the insecure
-         * and stupid method of seeding OpenSSLs PRNG with the systems PRNG. */
-        if (!RAND_status())
-        {
-            srand((unsigned int)(t % UINT_MAX));
-            while (!RAND_status() && system_prn_max > 0)
-            {
-                prn = rand();
-                RAND_seed(&prn, sizeof(int));
-                system_prn_max--;
-            }
-        }
-        /* Are we happy now? */
-        if (!RAND_status())
-        {
-            *errstr = xasprintf(_("random file + time + pseudo randomness is "
-                        "not enough, giving up"));
-            return TLS_ESEED;
-        }
-        /* Save a rand file for later usage. We ignore errors here as we can't
-         * do anything about them. */
-        (void)RAND_write_file(randfile);
-    }
-    return TLS_EOK;
-}
-
-
 /*
  * mtls_lib_init()
  *
@@ -137,17 +65,6 @@ static int seed_prng(char **errstr)
 
 int mtls_lib_init(char **errstr)
 {
-    int e;
-
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-    SSL_load_error_strings();
-    SSL_library_init();
-#endif
-    if ((e = seed_prng(errstr)) != TLS_EOK)
-    {
-        return e;
-    }
-
     return TLS_EOK;
 }
 
@@ -194,12 +111,6 @@ int mtls_cert_info_get(mtls_t *mtls, mtls_cert_info_t *mtci, char **errstr)
         *errstr = xasprintf(_("%s: error getting SHA256 fingerprint"), errmsg);
         return TLS_ECERT;
     }
-    usize = 20;
-    if (!X509_digest(x509cert, EVP_sha1(), mtci->sha1_fingerprint, &usize))
-    {
-        *errstr = xasprintf(_("%s: error getting SHA1 fingerprint"), errmsg);
-        return TLS_ECERT;
-    }
     asn1time = X509_get0_notBefore(x509cert);
     if (ASN1_TIME_to_tm(asn1time, &time) == 0)
     {
@@ -231,64 +142,6 @@ int mtls_cert_info_get(mtls_t *mtls, mtls_cert_info_t *mtci, char **errstr)
 
 
 /*
- * [OpenSSL only] hostname_match()
- *
- * Compares the hostname with the name in the certificate. The certificate name
- * may include a wildcard as the leftmost domain component (its first two
- * characters are "*." in this case).
- *
- * Returns 1 if the names match, 0 otherwise.
- *
- * This is the same form of matching that gnutls_x509_crt_check_hostname() from
- * GnuTLS 1.2.0 uses.
- * It conforms to RFC2595 (Using TLS with IMAP, POP3 and ACAP), section 2.4.
- * RFC2818 (HTTP over TLS), section 3.1 says that `f*.com matches foo.com'. This
- * function does not allow that.
- * RFC3207 (SMTP Service Extension for Secure SMTP over Transport Layer
- * Security), section 4.1 says nothing more than `A SMTP client would probably
- * only want to authenticate an SMTP server whose server certificate has a
- * domain name that is the domain name that the client thought it was connecting
- * to'.
- */
-
-static int hostname_match(const char *hostname, const char *certname)
-{
-    const char *cmp1, *cmp2;
-
-    if (strncmp(certname, "*.", 2) == 0)
-    {
-        cmp1 = certname + 2;
-        cmp2 = strchr(hostname, '.');
-        if (!cmp2)
-        {
-            return 0;
-        }
-        else
-        {
-            cmp2++;
-        }
-    }
-    else
-    {
-        cmp1 = certname;
-        cmp2 = hostname;
-    }
-
-    if (*cmp1 == '\0' || *cmp2 == '\0')
-    {
-        return 0;
-    }
-
-    if (strcasecmp(cmp1, cmp2) != 0)
-    {
-        return 0;
-    }
-
-    return 1;
-}
-
-
-/*
  * mtls_check_cert()
  *
  * If the 'mtls->have_trust_file' flag is set, perform a real verification of
@@ -307,18 +160,8 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
     X509 *x509cert;
     long status;
     const char *error_msg;
-    int i;
     /* hostname in ASCII format: */
     char *idn_hostname = NULL;
-    /* needed to get the common name: */
-    X509_NAME *x509_subject;
-    char *buf;
-    int length;
-    /* needed to get the DNS subjectAltNames: */
-    void *subj_alt_names;
-    int subj_alt_names_count;
-    GENERAL_NAME *subj_alt_name;
-    /* did we find a name matching hostname? */
     int match_found;
     /* needed for fingerprint checking */
     unsigned int usize;
@@ -341,64 +184,22 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
         return TLS_ECERT;
     }
 
-    if (mtls->have_sha256_fingerprint
-            || mtls->have_sha1_fingerprint || mtls->have_md5_fingerprint)
+    if (mtls->have_sha256_fingerprint)
     {
-        /* If one of these matches, we trust the peer and do not perform any
-         * other checks. */
-        if (mtls->have_sha256_fingerprint)
+        usize = 32;
+        if (!X509_digest(x509cert, EVP_sha256(), fingerprint, &usize))
         {
-            usize = 32;
-            if (!X509_digest(x509cert, EVP_sha256(), fingerprint, &usize))
-            {
-                *errstr = xasprintf(_("%s: error getting SHA256 fingerprint"),
-                        error_msg);
-                X509_free(x509cert);
-                return TLS_ECERT;
-            }
-            if (memcmp(fingerprint, mtls->fingerprint, 32) != 0)
-            {
-                *errstr = xasprintf(_("%s: the certificate fingerprint "
-                            "does not match"), error_msg);
-                X509_free(x509cert);
-                return TLS_ECERT;
-            }
+            *errstr = xasprintf(_("%s: error getting SHA256 fingerprint"),
+                    error_msg);
+            X509_free(x509cert);
+            return TLS_ECERT;
         }
-        else if (mtls->have_sha1_fingerprint)
+        if (memcmp(fingerprint, mtls->fingerprint, 32) != 0)
         {
-            usize = 20;
-            if (!X509_digest(x509cert, EVP_sha1(), fingerprint, &usize))
-            {
-                *errstr = xasprintf(_("%s: error getting SHA1 fingerprint"),
-                        error_msg);
-                X509_free(x509cert);
-                return TLS_ECERT;
-            }
-            if (memcmp(fingerprint, mtls->fingerprint, 20) != 0)
-            {
-                *errstr = xasprintf(_("%s: the certificate fingerprint "
-                            "does not match"), error_msg);
-                X509_free(x509cert);
-                return TLS_ECERT;
-            }
-        }
-        else
-        {
-            usize = 16;
-            if (!X509_digest(x509cert, EVP_md5(), fingerprint, &usize))
-            {
-                *errstr = xasprintf(_("%s: error getting MD5 fingerprint"),
-                        error_msg);
-                X509_free(x509cert);
-                return TLS_ECERT;
-            }
-            if (memcmp(fingerprint, mtls->fingerprint, 16) != 0)
-            {
-                *errstr = xasprintf(_("%s: the certificate fingerprint "
-                            "does not match"), error_msg);
-                X509_free(x509cert);
-                return TLS_ECERT;
-            }
+            *errstr = xasprintf(_("%s: the certificate fingerprint "
+                        "does not match"), error_msg);
+            X509_free(x509cert);
+            return TLS_ECERT;
         }
         X509_free(x509cert);
         return TLS_EOK;
@@ -418,80 +219,17 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
             return TLS_ECERT;
         }
     }
+    printf("*** status=%ld\n", status);
 
     /* Check if 'hostname' matches the one of the subjectAltName extensions of
      * type DNS or the Common Name (CN). */
-
+    /*
 #ifdef HAVE_LIBIDN
     idn2_to_ascii_lz(mtls->hostname, &idn_hostname, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
 #endif
 
-    /* Try the DNS subjectAltNames. */
-    match_found = 0;
-    if ((subj_alt_names =
-                X509_get_ext_d2i(x509cert, NID_subject_alt_name, NULL, NULL)))
-    {
-        subj_alt_names_count = sk_GENERAL_NAME_num(subj_alt_names);
-        for (i = 0; i < subj_alt_names_count; i++)
-        {
-            subj_alt_name = sk_GENERAL_NAME_value(subj_alt_names, i);
-            if (subj_alt_name->type == GEN_DNS)
-            {
-                if ((size_t)(subj_alt_name->d.ia5->length)
-                        != strlen((char *)(subj_alt_name->d.ia5->data)))
-                {
-                    *errstr = xasprintf(_("%s: certificate subject "
-                                "alternative name contains NUL"), error_msg);
-                    X509_free(x509cert);
-                    free(idn_hostname);
-                    return TLS_ECERT;
-                }
-                if ((match_found = hostname_match(
-                                idn_hostname ? idn_hostname : mtls->hostname,
-                                (char *)(subj_alt_name->d.ia5->data))))
-                {
-                    break;
-                }
-            }
-        }
-    }
-    if (!match_found)
-    {
-        /* Try the common name */
-        if (!(x509_subject = X509_get_subject_name(x509cert)))
-        {
-            *errstr = xasprintf(_("%s: cannot get certificate subject"),
-                    error_msg);
-            X509_free(x509cert);
-            free(idn_hostname);
-            return TLS_ECERT;
-        }
-        length = X509_NAME_get_text_by_NID(x509_subject, NID_commonName,
-                NULL, 0);
-        buf = xmalloc((size_t)length + 1);
-        if (X509_NAME_get_text_by_NID(x509_subject, NID_commonName,
-                    buf, length + 1) == -1)
-        {
-            *errstr = xasprintf(_("%s: cannot get certificate common name"),
-                    error_msg);
-            X509_free(x509cert);
-            free(idn_hostname);
-            free(buf);
-            return TLS_ECERT;
-        }
-        if ((size_t)length != strlen(buf))
-        {
-            *errstr = xasprintf(_("%s: certificate common name contains NUL"),
-                    error_msg);
-            X509_free(x509cert);
-            free(idn_hostname);
-            free(buf);
-            return TLS_ECERT;
-        }
-        match_found = hostname_match(idn_hostname ? idn_hostname : mtls->hostname,
-                buf);
-        free(buf);
-    }
+    match_found = X509_check_host(x509cert, idn_hostname ? idn_hostname : mtls->hostname,
+        0, X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT | X509_CHECK_FLAG_NO_WILDCARDS, NULL);
     X509_free(x509cert);
     free(idn_hostname);
 
@@ -502,6 +240,7 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
                 error_msg, mtls->hostname);
         return TLS_ECERT;
     }
+    */
 
     return TLS_EOK;
 }
@@ -524,7 +263,8 @@ int mtls_init(mtls_t *mtls,
         int no_certcheck,
         char **errstr)
 {
-    const SSL_METHOD *ssl_method = SSLv23_client_method();
+    const SSL_METHOD *ssl_method = TLS_client_method();
+    X509_VERIFY_PARAM *param = NULL;
 
     /* FIXME: Implement support for 'min_dh_prime_bits' */
     if (min_dh_prime_bits >= 0)
@@ -567,8 +307,11 @@ int mtls_init(mtls_t *mtls,
         mtls->internals = NULL;
         return TLS_ELIBFAILED;
     }
-    /* SSLv2 and SSLv3 have known flaws. Disable them. */
-    (void)SSL_CTX_set_options(mtls->internals->ssl_ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
+    SSL_CTX_set_security_level(mtls->internals->ssl_ctx, 2);
+
+    /* Disable old protocols. */
+    (void)SSL_CTX_set_options(mtls->internals->ssl_ctx,
+        SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
     if (key_file && cert_file)
     {
         if (SSL_CTX_use_PrivateKey_file(
@@ -628,16 +371,6 @@ int mtls_init(mtls_t *mtls,
         memcpy(mtls->fingerprint, sha256_fingerprint, 32);
         mtls->have_sha256_fingerprint = 1;
     }
-    else if (sha1_fingerprint && !no_certcheck)
-    {
-        memcpy(mtls->fingerprint, sha1_fingerprint, 20);
-        mtls->have_sha1_fingerprint = 1;
-    }
-    else if (md5_fingerprint && !no_certcheck)
-    {
-        memcpy(mtls->fingerprint, md5_fingerprint, 16);
-        mtls->have_md5_fingerprint = 1;
-    }
     if (!(mtls->internals->ssl = SSL_new(mtls->internals->ssl_ctx)))
     {
         *errstr = xasprintf(_("cannot create a TLS structure: %s"),
@@ -649,6 +382,25 @@ int mtls_init(mtls_t *mtls,
     }
     mtls->no_certcheck = no_certcheck;
     mtls->hostname = xstrdup(hostname);
+    int index = SSL_get_ex_new_index(0, "mtls", NULL, NULL, NULL);
+    assert(1 == index);
+    SSL_set_ex_data(mtls->internals->ssl, index, mtls);
+    SSL_set_tlsext_host_name(mtls->internals->ssl, mtls->hostname);
+
+    //X509_V_ERR_HOSTNAME_MISMATCH
+    //SSL_set_verify(mtls->internals->ssl, SSL_VERIFY_PEER, NULL);
+    SSL_set_verify(mtls->internals->ssl, no_certcheck ? SSL_VERIFY_NONE : SSL_VERIFY_PEER, NULL);// ssl_check_cert);
+    // SSL_get_verify_result returns X509_V_OK for some reason
+    /* Enable automatic hostname checks */
+    param = SSL_CTX_get0_param(mtls->internals->ssl_ctx);
+    // has no effect??
+    X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+    int success = X509_VERIFY_PARAM_set1_host(param, mtls->hostname, 0);
+    assert(success);
+    X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK);
+    //SSL_CTX_set1_param(mtls->internals->ssl_ctx, param);
+//    SSL_set_param
+    SSL_set_verify(mtls->internals->ssl, SSL_VERIFY_NONE, NULL);
     return TLS_EOK;
 }
 
@@ -770,7 +522,14 @@ int mtls_start(mtls_t *mtls, int fd,
     }
     if (mtls_parameter_description)
     {
-        *mtls_parameter_description = NULL; /* TODO */
+        static const int desc_size = 200;
+        *mtls_parameter_description = xmalloc(desc_size);
+        const SSL_CIPHER* cipher = SSL_get_current_cipher(mtls->internals->ssl);
+        const char* name = SSL_CIPHER_standard_name(cipher);
+        if (isatty(fileno(stdout)))
+            snprintf(*mtls_parameter_description, desc_size, "%s \x1B]8;;https://ciphersuite.info/cs/%s/\x1b\\%s\x1b]8;;\x1b\\", SSL_CIPHER_get_version(cipher), name, name);
+        else
+            snprintf(*mtls_parameter_description, desc_size, "%s %s", SSL_CIPHER_get_version(cipher), name);
     }
     if (!mtls->no_certcheck)
     {
@@ -782,6 +541,8 @@ int mtls_start(mtls_t *mtls, int fd,
         }
     }
     mtls->is_active = 1;
+    mtls->is_tls_1_3_or_newer =
+        SSL_SESSION_get_protocol_version(SSL_get_session(mtls->internals->ssl)) >= TLS1_3_VERSION;
     return TLS_EOK;
 }
 
