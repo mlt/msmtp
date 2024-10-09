@@ -28,8 +28,8 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
-#if OPENSSL_VERSION_NUMBER < 0x30300010
-# error OpenSSL is too old
+#if OPENSSL_VERSION_NUMBER < 0x10100010L
+#error OpenSSL is too old
 #endif
 
 #ifdef HAVE_LIBIDN
