@@ -25,6 +25,7 @@
 # include "config.h"
 #endif
 
+#include <strings.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
@@ -160,9 +161,6 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
     X509 *x509cert;
     long status;
     const char *error_msg;
-    /* hostname in ASCII format: */
-    char *idn_hostname = NULL;
-    int match_found;
     /* needed for fingerprint checking */
     unsigned int usize;
     unsigned char fingerprint[32];
@@ -219,28 +217,6 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
             return TLS_ECERT;
         }
     }
-    printf("*** status=%ld\n", status);
-
-    /* Check if 'hostname' matches the one of the subjectAltName extensions of
-     * type DNS or the Common Name (CN). */
-    /*
-#ifdef HAVE_LIBIDN
-    idn2_to_ascii_lz(mtls->hostname, &idn_hostname, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
-#endif
-
-    match_found = X509_check_host(x509cert, idn_hostname ? idn_hostname : mtls->hostname,
-        0, X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT | X509_CHECK_FLAG_NO_WILDCARDS, NULL);
-    X509_free(x509cert);
-    free(idn_hostname);
-
-    if (!match_found)
-    {
-        *errstr = xasprintf(
-                _("%s: the certificate owner does not match hostname %s"),
-                error_msg, mtls->hostname);
-        return TLS_ECERT;
-    }
-    */
 
     return TLS_EOK;
 }
@@ -279,14 +255,6 @@ int mtls_init(mtls_t *mtls,
     {
         *errstr = xasprintf(
                 _("cannot set priorities for TLS session: %s"),
-                _("feature not yet implemented for OpenSSL"));
-        return TLS_ELIBFAILED;
-    }
-    /* FIXME: Implement support for 'crl_file' */
-    if (trust_file && crl_file)
-    {
-        *errstr = xasprintf(
-                _("cannot load CRL file: %s"),
                 _("feature not yet implemented for OpenSSL"));
         return TLS_ELIBFAILED;
     }
@@ -382,25 +350,28 @@ int mtls_init(mtls_t *mtls,
     }
     mtls->no_certcheck = no_certcheck;
     mtls->hostname = xstrdup(hostname);
-    int index = SSL_get_ex_new_index(0, "mtls", NULL, NULL, NULL);
-    assert(1 == index);
-    SSL_set_ex_data(mtls->internals->ssl, index, mtls);
-    SSL_set_tlsext_host_name(mtls->internals->ssl, mtls->hostname);
 
-    //X509_V_ERR_HOSTNAME_MISMATCH
-    //SSL_set_verify(mtls->internals->ssl, SSL_VERIFY_PEER, NULL);
-    SSL_set_verify(mtls->internals->ssl, no_certcheck ? SSL_VERIFY_NONE : SSL_VERIFY_PEER, NULL);// ssl_check_cert);
-    // SSL_get_verify_result returns X509_V_OK for some reason
-    /* Enable automatic hostname checks */
-    param = SSL_get0_param(mtls->internals->ssl);
-    // has no effect??
-    X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-    int success = X509_VERIFY_PARAM_set1_host(param, mtls->hostname, 0);
-    assert(success);
-    X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK);
-    //SSL_CTX_set1_param(mtls->internals->ssl_ctx, param);
-//    SSL_set_param
-    SSL_set_verify(mtls->internals->ssl, SSL_VERIFY_NONE, NULL);
+    if (crl_file)
+    {
+        X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK);
+        X509_STORE* store = SSL_CTX_get_cert_store(mtls->internals->ssl_ctx);
+		X509_LOOKUP* lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
+        int type = X509_FILETYPE_ASN1; /* DER */
+        char* pos = strrchr(crl_file, '.');
+        if (pos && 0 == strcasecmp(pos, ".pem")) {
+            type = X509_FILETYPE_PEM;
+        }
+        if (0 == X509_load_crl_file(lookup, crl_file, type)) {
+			*errstr = xasprintf(
+				_("cannot set X509 CRL file %s for TLS session: %s"),
+				crl_file, ERR_error_string(ERR_get_error(), NULL));
+            SSL_free(mtls->internals->ssl);
+            SSL_CTX_free(mtls->internals->ssl_ctx);
+            mtls->internals = NULL;
+            return TLS_ELIBFAILED;
+        }
+    }
+
     return TLS_EOK;
 }
 
@@ -483,6 +454,17 @@ int mtls_start(mtls_t *mtls, int fd,
         mtls_cert_info_t *tci, char **mtls_parameter_description, char **errstr)
 {
     int error_code;
+    char *idn_hostname = NULL;
+    X509_VERIFY_PARAM *param = SSL_get0_param(mtls->internals->ssl);
+
+#ifdef HAVE_LIBIDN
+    idn2_to_ascii_lz(mtls->hostname, &idn_hostname, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
+#endif
+    SSL_set_tlsext_host_name(mtls->internals->ssl, idn_hostname ? idn_hostname : mtls->hostname);
+    X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+    X509_VERIFY_PARAM_set1_host(param, idn_hostname ? idn_hostname : mtls->hostname, 0);
+    if (idn_hostname)
+        free(idn_hostname);
 
     if (!SSL_set_fd(mtls->internals->ssl, fd))
     {
