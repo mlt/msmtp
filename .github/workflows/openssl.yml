@@ -7,40 +7,87 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
     runs-on: ${{ matrix.os }}
     steps:
     - name: Check out repository code
       uses: actions/checkout@v4
-    - name: Set up Homebrew
-      id: set-up-homebrew
-      uses: Homebrew/actions/setup-homebrew@master
-    - name: Install Homebrew dependencies
+    - name: 💾 Cache downloaded Pacman packages on Windows
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: C:\msys64\var\cache\pacman\pkg
+        key: build-dep-windows
+    - name: 🍺 Install dependencies on MacOS
+      if: runner.os == 'macOS'
+      # ca-certificates update pulls lots of deps
+      run: env HOMEBREW_NO_AUTO_UPDATE=1 brew install texinfo autoconf automake
+    - name: 🐧 Install dependencies on Linux
+      if: runner.os == 'Linux'
+      run: sudo apt-get install -qq -y -o=Dpkg::Use-Pty=0 libidn2-dev gettext
+    - name: 🔍 Add MSYS2 to path on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
       run: |
-        env HOMEBREW_NO_AUTO_UPDATE=1 brew install openssl gcc autoconf automake libidn2 gettext texinfo pkg-config
-    - name: Build
+        echo "C:\msys64\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        echo "C:\msys64\ucrt64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+    - name: 🪟 Install dependencies on Windows
+      if: runner.os == 'Windows'
+      # autotools pulls libtool as well
+      run: pacman --noconfirm -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-ca-certificates mingw-w64-ucrt-x86_64-libidn2 mingw-w64-ucrt-x86_64-pkgconf pkgconf make texinfo autoconf automake
+    - name: ⚒ Build
+      env: # needed for Windows or networking code won't link properly
+        MSYSTEM: UCRT64
       run: |
         autoreconf -i
         ./configure --with-tls=openssl --with-libidn
         make
     - name: Test expired
       continue-on-error: true
-      run: ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=expired.badssl.com
+      run: |
+        ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=expired.badssl.com 2>&1 | tee output.log || true
+        grep -q 'certificate has expired' output.log && echo "🎉 Success"
     - name: Test wrong host
       continue-on-error: true
-      run: ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=wrong.host.badssl.com
+      run: |
+        ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=wrong.host.badssl.com 2>&1 | tee output.log || true
+        grep -q 'hostname mismatch' output.log && echo "🎉 Success"
     - name: Test revoked
       continue-on-error: true
-      run: ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=revoked.badssl.com
+      run: |
+        curl -sLO http://crl3.digicert.com/DigiCertG5TLSECCSHA3842021CA1-1.crl
+        echo "👉 Test CRL in DER format"
+        ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=digicert-tls-ecc-p384-root-g5-revoked.chain-demos.digicert.com --tls-crl-file=DigiCertG5TLSECCSHA3842021CA1-1.crl 2>&1 | tee output.log || true
+        grep -q 'certificate revoked' output.log && echo "🎉 Success"
+        echo "⚙ Converting CRL to PEM format"
+        openssl crl -inform der -in DigiCertG5TLSECCSHA3842021CA1-1.crl -out DigiCertG5TLSECCSHA3842021CA1-1.pem
+        echo "👉 Test CRL in PEM format"
+        ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=digicert-tls-ecc-p384-root-g5-revoked.chain-demos.digicert.com --tls-crl-file=DigiCertG5TLSECCSHA3842021CA1-1.pem 2>&1 | tee output.log || true
+        grep -q 'certificate revoked' output.log && echo "🎉 Success"
     - name: Test wrong host name on GMX
       continue-on-error: true
       run: |
-        # ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmx.com --tls-certcheck=off
+        echo "👉 Use incorrect host 🖥 smtp.gmx.com to connect, but swap 🖥 mail.gmx.com for certificate verification"
         ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmx.com --tls-host-override=mail.gmx.com
-        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmx.com
+        echo "👉 Use incorrect host 🖥 smtp.gmx.com to connect, expecting mismatch"
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmx.com 2>&1 | tee output.log || true
+        grep -q 'hostname mismatch' output.log && echo "🎉 Success"
+        echo "❗Use incorrect host 🖥 smtp.gmx.com to connect and ignore certificate check"
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmx.com --tls-certcheck=off
     - name: Test SNI
       continue-on-error: true
       run: |
-        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmail.com # <- normal
-        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=imap.gmail.com # <- won't work without SSL_set_tlsext_host_name
+        echo "👉 Proper connect 🖥 smtp.gmail.com, look at IPs and names on certificates"
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmail.com
+        echo "👉 Use wrong host name 🖥 imap.gmail.com that points to same group. ⚠ It won't work without SSL_set_tlsext_host_name"
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=imap.gmail.com
+        echo "👉 Use wrong host name 🖥 imap.gmail.com, but proper one 🖥 smtp.gmail.com for certificate verification"
         ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=imap.gmail.com --tls-host-override=smtp.gmail.com
+    - name: Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: config_log-${{ matrix.os }}
+        path: config.log
