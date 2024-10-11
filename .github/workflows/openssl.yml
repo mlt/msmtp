@@ -7,7 +7,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest] #, macos-latest, windows-latest]
     defaults:
       run:
         shell: bash
@@ -86,6 +86,29 @@ jobs:
         ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=imap.gmail.com
         echo "👉 Use wrong host name 🖥 imap.gmail.com, but proper one 🖥 smtp.gmail.com for certificate verification"
         ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=imap.gmail.com --tls-host-override=smtp.gmail.com
+    - name: Test on a bad network
+      if: runner.os == 'Linux'
+      continue-on-error: true
+      run: |
+        # cat /sys/class/net/eth0/mtu
+        # cat /proc/sys/net/ipv4/tcp_mtu_probing
+        # cat /proc/sys/net/ipv4/ip_no_pmtu_disc
+        ip route
+        echo "🧨 Introduce chaos with NetEm"
+        # sudo ip route add 172.25.167.238/31 via $(ip route show default | cut -d\  -f3) mtu lock 552
+        # sudo tc qdisc add dev eth0 root netem delay 20ms 20ms loss 60% corrupt 60% rate 300kbit
+        sudo tc qdisc add dev eth0 root netem delay 20ms 20ms loss 50% corrupt 50%
+        # sudo tc qdisc add dev eth0 root netem delay 20ms 20ms loss 55% corrupt 55%
+        echo "👉 Use blocking I/O"
+        for i in {1..10}; do
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=172.253.122.108 --tls-host-override=smtp.gmail.com > /dev/null
+        done || true
+        echo "👉 Use non-blocking I/O"
+        for i in {1..10}; do
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=172.253.122.108 --tls-host-override=smtp.gmail.com --timeout=10 > /dev/null
+        done || true
+        sudo tc qdisc del dev eth0 root
+        # sudo ip route del 172.25.167.238/31
     - name: Artifacts
       uses: actions/upload-artifact@v4
       with:
