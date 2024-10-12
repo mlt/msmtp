@@ -38,6 +38,12 @@ jobs:
       if: runner.os == 'Windows'
       # autotools pulls libtool as well
       run: pacman --noconfirm -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-ca-certificates mingw-w64-ucrt-x86_64-libidn2 mingw-w64-ucrt-x86_64-pkgconf pkgconf make texinfo autoconf automake
+    - name: 🔍 Look up system details
+      id: conf
+      run: |
+        openssl version -a      # KTLS?
+        echo "CONF=$(openssl version -d | awk -F'"' '{print $2}')/openssl.cnf" >> "$GITHUB_OUTPUT"
+        cp `openssl version -d | awk -F'"' '{print $2}'`/openssl.cnf ./
     - name: ⚒ Build
       env: # needed for Windows or networking code won't link properly
         MSYSTEM: UCRT64
@@ -112,5 +118,7 @@ jobs:
     - name: Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: config_log-${{ matrix.os }}
-        path: config.log
+        name: misc-${{ matrix.os }}
+        path: |
+          config.log
+          openssl.cnf
