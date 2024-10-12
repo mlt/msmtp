@@ -43,7 +43,7 @@ jobs:
       run: |
         openssl version -a      # KTLS?
         echo "CONF=$(openssl version -d | awk -F'"' '{print $2}')/openssl.cnf" >> "$GITHUB_OUTPUT"
-        cp `openssl version -d | awk -F'"' '{print $2}'`/openssl.cnf ./
+        cp -L `openssl version -d | awk -F'"' '{print $2}'`/openssl.cnf ./
     - name: ⚒ Build
       env: # needed for Windows or networking code won't link properly
         MSYSTEM: UCRT64
@@ -51,6 +51,22 @@ jobs:
         autoreconf -i
         ./configure --with-tls=openssl --with-libidn
         make
+    - name: Test global config effects
+      continue-on-error: true
+      env:
+        CONF: ${{ steps.conf.outputs.CONF }}
+      run: |
+        sudo sed '/^providers = provider_sect$/r'<(cat <<EOF
+        ssl_conf = ssl_configuration
+        [ssl_configuration]
+        system_default = tls_system_default
+        [tls_system_default]
+        MaxProtocol = TLSv1.2
+        EOF
+        ) -i -- $CONF
+        ./src/msmtp --serverinfo --tls --port=443 --tls-starttls=off --host=smtp.gmail.com 2>&1 | tee output.log || true
+        grep -q 'TLSv1.2' output.log && echo "🎉 Success"
+        sudo cp openssl.cnf $CONF # restore
     - name: Test expired
       continue-on-error: true
       run: |
