@@ -49,7 +49,7 @@ jobs:
         MSYSTEM: UCRT64
       run: |
         autoreconf -i
-        ./configure --with-tls=openssl --with-libidn
+        ./configure --with-tls=openssl --with-libidn CFLAGS=--coverage LDFLAGS=-lgcov
         make
     - name: Test expired
       continue-on-error: true
@@ -122,3 +122,7 @@ jobs:
         path: |
           config.log
           openssl.cnf
+    - uses: codecov/codecov-action@v4
+      with:
+        plugin: gcov
+        token: ${{ secrets.CODECOV_TOKEN }}
