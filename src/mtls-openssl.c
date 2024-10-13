@@ -66,7 +66,27 @@ struct mtls_internals_t
 
 int mtls_lib_init(char **errstr)
 {
-    return TLS_EOK;
+    /* Explicit init is not required, however we could leverage appname
+     * and a dedicated config section, e.g.
+     *
+     * msmtp = msmtp_init
+     * [msmtp_init]
+     * ssl_conf = msmtp_ssl
+     * [msmtp_ssl]
+     * system_default = msmtp_defaults
+     * [msmtp_defaults]
+     * MinProtocol = TLSv1.3
+     */
+    int ret = TLS_EOK;
+    OPENSSL_INIT_SETTINGS* init = OPENSSL_INIT_new();
+    if (NULL == init)
+        return TLS_ELIBFAILED;
+    if (OPENSSL_INIT_set_config_appname(init, PACKAGE_NAME) &&
+        OPENSSL_init_ssl(0, init) == 0)
+        ret = TLS_ELIBFAILED;
+
+    OPENSSL_INIT_free(init);
+    return ret;
 }
 
 
