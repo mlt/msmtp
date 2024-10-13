@@ -51,6 +51,33 @@ jobs:
         autoreconf -i
         ./configure --with-tls=openssl --with-libidn CFLAGS=--coverage LDFLAGS=-lgcov
         make
+    - name: Test OpenSSL config
+      continue-on-error: true
+      run: |
+        echo "👉 msmtp specific section"
+        cat <<'EOT' > openssl.cnf
+        msmtp = msmtp_init
+        [msmtp_init]
+        ssl_conf = msmtp_ssl
+        [msmtp_ssl]
+        system_default = msmtp_defaults
+        [msmtp_defaults]
+        MaxProtocol = TLSv1.1
+        EOT
+        OPENSSL_CONF=openssl.cnf ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmail.com 2>&1 | tee output.log || true
+        grep -q 'no protocols available' output.log && echo "🎉 Success"
+        echo "👉 global section"
+        cat <<'EOT' > openssl.cnf
+        openssl_conf = msmtp_init
+        [msmtp_init]
+        ssl_conf = msmtp_ssl
+        [msmtp_ssl]
+        system_default = msmtp_defaults
+        [msmtp_defaults]
+        MaxProtocol = TLSv1.1
+        EOT
+        OPENSSL_CONF=openssl.cnf ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --host=smtp.gmail.com 2>&1 | tee output.log || true
+        grep -q 'no protocols available' output.log && echo "🎉 Success"
     - name: Test expired
       continue-on-error: true
       run: |
