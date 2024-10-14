@@ -27,7 +27,34 @@ jobs:
       run: env HOMEBREW_NO_AUTO_UPDATE=1 brew install texinfo autoconf automake
     - name: 🐧 Install dependencies on Linux
       if: runner.os == 'Linux'
-      run: sudo apt-get install -qq -y -o=Dpkg::Use-Pty=0 libidn2-dev gettext
+      run: |
+        sudo apt-get install -qq -y -o=Dpkg::Use-Pty=0 libidn2-dev gettext dnsmasq
+        echo "🌐 Set up DNS"
+        sudo -E bash -c "cat > /etc/dnsmasq.d/msmtp.conf" <<'EOT'
+        no-resolv
+        no-hosts
+        bind-interfaces
+        interface=lo
+        no-dhcp-interface=lo
+        listen-address=127.0.0.1
+        domain=test
+        host-record=почта.test,127.0.0.1
+        host-record=mail.test,127.0.0.1
+        mx-host=почта.test,почта.test,10
+        srv-host=_submission._tcp.почта.test,почта.test,587,0,5
+        srv-host=_submission._tcp.mail.test,mail.test,587,0,5
+        server=168.63.129.16
+        EOT
+        sudo systemctl start dnsmasq
+        sudo mkdir /etc/systemd/resolved.conf.d
+        sudo bash -c "cat > /etc/systemd/resolved.conf.d/msmtp.conf" <<'EOT'
+        [Resolve]
+        DNS=127.0.0.1
+        EOT
+        sudo sed -i '/^hosts/s/files/resolve [!UNAVAIL=return] files/' /etc/nsswitch.conf
+        sudo systemctl restart systemd-resolved.service
+        dig +short +idnin +idnout _submission._tcp.почта.test SRV
+        # host -t SRV _submission._tcp.почта.test
     - name: 🔍 Add MSYS2 to path on Windows
       if: runner.os == 'Windows'
       shell: pwsh
@@ -51,6 +78,11 @@ jobs:
         autoreconf -i
         ./configure --with-tls=openssl --with-libidn CFLAGS=--coverage LDFLAGS=-lgcov
         make
+    - name: Test SRV
+      if: runner.os == 'Linux'
+      run: |
+        ./src/msmtp --configure user@почта.test 2>&1 | tee output.log || true
+        grep -q 'host почта.test' output.log && echo "🎉 Success"
     - name: Test OpenSSL config
       continue-on-error: true
       run: |
