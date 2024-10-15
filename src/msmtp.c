@@ -1697,8 +1697,6 @@ int msmtp_configure(const char *address, const char *conffile)
 
     char *submissions_query;
     char *submission_query;
-    char *idn_domain = NULL;
-    char *idn_hostname = NULL; /* actually decoded */
 
     char *hostname = NULL;
     int port = -1;
@@ -1716,16 +1714,12 @@ int msmtp_configure(const char *address, const char *conffile)
         return EX_DATAERR;
     }
 
-#ifdef HAVE_LIBIDN
-    idn2_to_ascii_lz(domain_part, &idn_domain, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
-#endif
-
-    submissions_query = net_get_srv_query(idn_domain ? idn_domain : domain_part, "submissions");
+    submissions_query = net_get_srv_query(domain_part, "submissions");
     e = net_get_srv_record(submissions_query, &hostname, &port);
     if (e == NET_EOK) {
         starttls = 0;
     } else {
-        submission_query = net_get_srv_query(idn_domain ? idn_domain : domain_part, "submission");
+        submission_query = net_get_srv_query(domain_part, "submission");
         e = net_get_srv_record(submission_query, &hostname, &port);
         if (e == NET_EOK) {
             starttls = 1;
@@ -1739,19 +1733,11 @@ int msmtp_configure(const char *address, const char *conffile)
             free(submission_query);
             free(local_part);
             free(domain_part);
-            free(idn_domain);
             return EX_NOHOST;
         }
         free(submission_query);
     }
     free(submissions_query);
-#ifdef HAVE_LIBIDN
-    idn2_to_unicode_lzlz(hostname, &idn_hostname, 0);
-    free(hostname);
-    hostname = idn_hostname;
-    idn_hostname = NULL;
-#endif
-    free(idn_domain);
 
     /* comment header */
 
