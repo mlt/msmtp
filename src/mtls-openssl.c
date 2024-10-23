@@ -29,6 +29,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 #include <openssl/err.h>
+#include <openssl/ocsp.h>
 #if OPENSSL_VERSION_NUMBER < 0x10100010L
 #error OpenSSL is too old
 #endif
@@ -50,6 +51,7 @@
 #include "xalloc.h"
 #include "mtls.h"
 
+#define OCSP_SIMPLE
 
 struct mtls_internals_t
 {
@@ -180,20 +182,12 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
 {
     X509 *x509cert;
     long status;
-    const char *error_msg;
+    const char *error_msg = _("TLS certificate verification failed");
+    OCSP_RESPONSE *resp = NULL;
+    OCSP_BASICRESP *bs = NULL;
     /* needed for fingerprint checking */
     unsigned int usize;
     unsigned char fingerprint[32];
-
-
-    if (mtls->have_trust_file)
-    {
-        error_msg = _("TLS certificate verification failed");
-    }
-    else
-    {
-        error_msg = _("TLS certificate check failed");
-    }
 
     /* Get certificate */
     if (!(x509cert = SSL_get_peer_certificate(mtls->internals->ssl)))
@@ -209,15 +203,13 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
         {
             *errstr = xasprintf(_("%s: error getting SHA256 fingerprint"),
                     error_msg);
-            X509_free(x509cert);
-            return TLS_ECERT;
+            goto err;
         }
         if (memcmp(fingerprint, mtls->fingerprint, 32) != 0)
         {
             *errstr = xasprintf(_("%s: the certificate fingerprint "
                         "does not match"), error_msg);
-            X509_free(x509cert);
-            return TLS_ECERT;
+            goto err;
         }
         X509_free(x509cert);
         return TLS_EOK;
@@ -233,12 +225,107 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
         {
             *errstr = xasprintf("%s: %s", error_msg,
                     X509_verify_cert_error_string(status));
-            X509_free(x509cert);
-            return TLS_ECERT;
+            goto err;
         }
     }
 
+    TLS_FEATURE *tls_feature = X509_get_ext_d2i(x509cert, NID_tlsfeature, NULL, NULL);
+    if (tls_feature) {
+        assert(sk_ASN1_INTEGER_num(tls_feature) == 1);
+
+        unsigned char *der;
+        ASN1_INTEGER *ai = sk_ASN1_INTEGER_value(tls_feature, 0);
+        long tlsextid = ASN1_INTEGER_get(ai);
+        assert(tlsextid == 5 /* status_request */ || tlsextid == 17 /* status_request_v2 */);
+
+        long der_size = SSL_get_tlsext_status_ocsp_resp(mtls->internals->ssl, &der);
+        if (der_size == -1) {
+            *errstr = xasprintf("%s: %s", error_msg,
+                _("The certificate requires the server to include an OCSP status in its response, but the OCSP status is missing."));
+            goto err;
+        }
+        resp = d2i_OCSP_RESPONSE(NULL, (const unsigned char **)&der, der_size);
+        assert(resp);
+        int status = OCSP_response_status(resp);
+        assert(status == OCSP_RESPONSE_STATUS_SUCCESSFUL);
+        bs = OCSP_response_get1_basic(resp);
+        if (OCSP_basic_verify(bs, NULL,
+            SSL_CTX_get_cert_store(mtls->internals->ssl_ctx), 0) <= 0)
+        {
+            *errstr = xasprintf("%s: %s", error_msg,
+                ERR_error_string(ERR_get_error(), NULL));
+            goto err_ocsp;
+        }
+        int reason;
+        ASN1_GENERALIZEDTIME *revtime;
+        ASN1_GENERALIZEDTIME *thisupd;
+        ASN1_GENERALIZEDTIME *nextupd;
+#ifdef OCSP_SIMPLE
+        assert(OCSP_resp_count(bs) == 1);
+        OCSP_SINGLERESP *single = OCSP_resp_get0(bs, 0);
+        status = OCSP_single_get0_status(single, &reason, &revtime, &thisupd, &nextupd);
+#else
+        /* this stuff is from s_server.c get_ocsp_resp_from_responder() almost verbatim */
+        X509_NAME *iname = X509_get_issuer_name(x509cert);
+        STACK_OF(X509) *chain = NULL;
+        SSL_CTX_get0_chain_certs(mtls->internals->ssl_ctx, &chain);
+        OCSP_CERTID *id = NULL;
+        for (int i = 0; i < sk_X509_num(chain); i++) {
+            /* check the untrusted certificate chain (-cert_chain option) */
+            X509 *cert = sk_X509_value(chain, i);
+            if (X509_name_cmp(iname, X509_get_subject_name(cert)) == 0) {
+                /* the issuer certificate is found */
+                id = OCSP_cert_to_id(NULL, x509cert, cert);
+                break;
+            }
+        }
+        if (id == NULL) {
+            X509_STORE_CTX *inctx = NULL;
+            inctx = X509_STORE_CTX_new();
+            if (inctx == NULL)
+                goto err_ocsp;
+            if (!X509_STORE_CTX_init(inctx, SSL_CTX_get_cert_store(mtls->internals->ssl_ctx),
+                NULL, NULL))
+                goto err_ocsp;
+            X509_OBJECT *obj = X509_STORE_CTX_get_obj_by_subject(inctx, X509_LU_X509, iname);
+            if (obj == NULL) {
+                *errstr = xasprintf("%s: %s", error_msg,
+                    _("Can't retrieve issuer certificate."));
+                goto err_ocsp;
+            }
+            id = OCSP_cert_to_id(NULL, x509cert, X509_OBJECT_get0_X509(obj));
+            X509_OBJECT_free(obj);
+        }
+
+        if (!OCSP_resp_find_status(bs, id, &status, &reason, &revtime, &thisupd, &nextupd)) {
+            *errstr = xasprintf("%s: %s", error_msg, _("failed to find OCSP status"));
+            goto err_ocsp;
+        }
+        OCSP_CERTID_free(id);
+#endif
+        if (!OCSP_check_validity(thisupd, nextupd, 600 /* sec drift, up to */, 3600 /* sec old max */)) {
+            *errstr = xasprintf("%s: %s", error_msg, ERR_error_string(ERR_get_error(), NULL));
+            goto err_ocsp;
+        }
+        OCSP_BASICRESP_free(bs);
+        OCSP_RESPONSE_free(resp);
+
+        if (V_OCSP_CERTSTATUS_GOOD != status)
+        {
+            *errstr = xasprintf("%s: %s=%s", error_msg, _("OCSP Cert Status"), OCSP_cert_status_str(status));
+            goto err;
+        }
+    }
+
+    X509_free(x509cert);
     return TLS_EOK;
+
+err_ocsp:
+    OCSP_BASICRESP_free(bs);
+    OCSP_RESPONSE_free(resp);
+err:
+    X509_free(x509cert);
+    return TLS_ECERT;
 }
 
 
@@ -486,6 +573,7 @@ int mtls_start(mtls_t *mtls, int fd,
     idn2_to_ascii_lz(mtls->hostname, &idn_hostname, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
 #endif
     SSL_set_tlsext_host_name(mtls->internals->ssl, idn_hostname ? idn_hostname : mtls->hostname);
+    SSL_set_tlsext_status_type(mtls->internals->ssl, TLSEXT_STATUSTYPE_ocsp);
     X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
     X509_VERIFY_PARAM_set1_host(param, idn_hostname ? idn_hostname : mtls->hostname, 0);
     if (idn_hostname)
