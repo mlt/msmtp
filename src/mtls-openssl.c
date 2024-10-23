@@ -330,7 +330,12 @@ int mtls_init(mtls_t *mtls,
     {
         if (strcmp(trust_file, "system") == 0)
         {
-            if (SSL_CTX_set_default_verify_paths(mtls->internals->ssl_ctx) != 1)
+            if (SSL_CTX_set_default_verify_paths(mtls->internals->ssl_ctx) != 1
+#ifdef W32_NATIVE
+                /* OpenSSL 3.2+ */
+                || SSL_CTX_load_verify_store(mtls->internals->ssl_ctx, "org.openssl.winstore:") != 1
+#endif
+                )
             {
                 *errstr = xasprintf(_("cannot set X509 system trust for TLS session: %s"),
                         ERR_error_string(ERR_get_error(), NULL));
