@@ -192,7 +192,7 @@ static int mtls_check_cert(mtls_t *mtls, char **errstr)
     /* Get certificate */
     if (!(x509cert = SSL_get_peer_certificate(mtls->internals->ssl)))
     {
-        *errstr = xasprintf(_("%s: no certificate was sent"), error_msg);
+        *errstr = xasprintf(_("%s: no certificate was found"), error_msg);
         return TLS_ECERT;
     }
 
@@ -349,9 +349,16 @@ int mtls_init(mtls_t *mtls,
     const SSL_METHOD *ssl_method = TLS_client_method();
     X509_VERIFY_PARAM *param = NULL;
 
-    /* FIXME: Implement support for 'min_dh_prime_bits' */
+    if (sha1_fingerprint || md5_fingerprint)
+    {
+        *errstr = xasprintf(
+            _("cannot use deprecated fingerprints, please update to SHA256"));
+        return TLS_ELIBFAILED;
+    }
     if (min_dh_prime_bits >= 0)
     {
+        /* This will never need to be implemented because it is deprecated.
+         * But we should report it and not just silently ignore it. */
         *errstr = xasprintf(
                 _("cannot set minimum number of DH prime bits for TLS: %s"),
                 _("feature not yet implemented for OpenSSL"));
@@ -376,7 +383,7 @@ int mtls_init(mtls_t *mtls,
 
     if (!(mtls->internals->ssl_ctx = SSL_CTX_new(ssl_method)))
     {
-        *errstr = xasprintf(_("cannot create TLS context: %s"),
+        *errstr = xasprintf(_("cannot initialize TLS session: %s"),
                 ERR_error_string(ERR_get_error(), NULL));
         free(mtls->internals);
         mtls->internals = NULL;
@@ -411,9 +418,7 @@ int mtls_init(mtls_t *mtls,
     }
     if (trust_file
             && !no_certcheck
-            && !sha256_fingerprint
-            && !sha1_fingerprint
-            && !md5_fingerprint)
+            && !sha256_fingerprint)
     {
         if (strcmp(trust_file, "system") == 0)
         {
@@ -436,7 +441,7 @@ int mtls_init(mtls_t *mtls,
         {
             if (SSL_CTX_load_verify_locations(mtls->internals->ssl_ctx, trust_file, NULL) != 1)
             {
-                *errstr = xasprintf(_("cannot load trust file %s: %s"),
+                *errstr = xasprintf(_("cannot set X509 trust file %s for TLS session: %s"),
                         trust_file, ERR_error_string(ERR_get_error(), NULL));
                 SSL_CTX_free(mtls->internals->ssl_ctx);
                 free(mtls->internals);
