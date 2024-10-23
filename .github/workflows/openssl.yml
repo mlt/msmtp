@@ -184,4 +184,5 @@ jobs:
     - uses: codecov/codecov-action@v4
       with:
         plugin: gcov
+        working-directory: src
         token: ${{ secrets.CODECOV_TOKEN }}
