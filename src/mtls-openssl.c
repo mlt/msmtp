@@ -346,8 +346,7 @@ int mtls_init(mtls_t *mtls,
         int no_certcheck,
         char **errstr)
 {
-    const SSL_METHOD *ssl_method = TLS_client_method();
-    X509_VERIFY_PARAM *param = NULL;
+    int ret = TLS_ELIBFAILED;
 
     if (sha1_fingerprint || md5_fingerprint)
     {
@@ -373,15 +372,9 @@ int mtls_init(mtls_t *mtls,
         return TLS_ELIBFAILED;
     }
 
-    if (!ssl_method)
-    {
-        *errstr = xasprintf(_("cannot set TLS method"));
-        return TLS_ELIBFAILED;
-    }
-
     mtls->internals = xmalloc(sizeof(struct mtls_internals_t));
 
-    if (!(mtls->internals->ssl_ctx = SSL_CTX_new(ssl_method)))
+    if (!(mtls->internals->ssl_ctx = SSL_CTX_new(TLS_client_method())))
     {
         *errstr = xasprintf(_("cannot initialize TLS session: %s"),
                 ERR_error_string(ERR_get_error(), NULL));
@@ -389,7 +382,6 @@ int mtls_init(mtls_t *mtls,
         mtls->internals = NULL;
         return TLS_ELIBFAILED;
     }
-    SSL_CTX_set_security_level(mtls->internals->ssl_ctx, 2);
 
     /* Disable old protocols. */
     (void)SSL_CTX_set_options(mtls->internals->ssl_ctx,
@@ -401,19 +393,15 @@ int mtls_init(mtls_t *mtls,
         {
             *errstr = xasprintf(_("cannot load key file %s: %s"),
                     key_file, ERR_error_string(ERR_get_error(), NULL));
-            SSL_CTX_free(mtls->internals->ssl_ctx);
-            free(mtls->internals);
-            mtls->internals = NULL;
-            return TLS_EFILE;
+            ret = TLS_EFILE;
+            goto err;
         }
         if (SSL_CTX_use_certificate_chain_file(mtls->internals->ssl_ctx, cert_file) != 1)
         {
             *errstr = xasprintf(_("cannot load certificate file %s: %s"),
                     cert_file, ERR_error_string(ERR_get_error(), NULL));
-            SSL_CTX_free(mtls->internals->ssl_ctx);
-            free(mtls->internals);
-            mtls->internals = NULL;
-            return TLS_EFILE;
+            ret = TLS_EFILE;
+            goto err;
         }
     }
     if (trust_file
@@ -431,10 +419,7 @@ int mtls_init(mtls_t *mtls,
             {
                 *errstr = xasprintf(_("cannot set X509 system trust for TLS session: %s"),
                         ERR_error_string(ERR_get_error(), NULL));
-                SSL_CTX_free(mtls->internals->ssl_ctx);
-                free(mtls->internals);
-                mtls->internals = NULL;
-                return TLS_EFILE;
+                goto err;
             }
         }
         else
@@ -443,10 +428,26 @@ int mtls_init(mtls_t *mtls,
             {
                 *errstr = xasprintf(_("cannot set X509 trust file %s for TLS session: %s"),
                         trust_file, ERR_error_string(ERR_get_error(), NULL));
-                SSL_CTX_free(mtls->internals->ssl_ctx);
-                free(mtls->internals);
-                mtls->internals = NULL;
-                return TLS_EFILE;
+                goto err;
+            }
+        }
+        if (crl_file)
+        {
+            X509_VERIFY_PARAM *param = SSL_get0_param(mtls->internals->ssl);
+            X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK);
+            X509_STORE *store = SSL_CTX_get_cert_store(mtls->internals->ssl_ctx);
+            X509_LOOKUP *lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
+            int type = X509_FILETYPE_ASN1; /* DER */
+            char *pos = strrchr(crl_file, '.');
+            if (pos && 0 == strcasecmp(pos, ".pem")) {
+                type = X509_FILETYPE_PEM;
+            }
+            if (0 == X509_load_crl_file(lookup, crl_file, type)) {
+                *errstr = xasprintf(
+                    _("cannot set X509 CRL file %s for TLS session: %s"),
+                    crl_file, ERR_error_string(ERR_get_error(), NULL));
+                ret = TLS_EFILE;
+                goto err;
             }
         }
         mtls->have_trust_file = 1;
@@ -460,36 +461,17 @@ int mtls_init(mtls_t *mtls,
     {
         *errstr = xasprintf(_("cannot create a TLS structure: %s"),
                 ERR_error_string(ERR_get_error(), NULL));
-        SSL_CTX_free(mtls->internals->ssl_ctx);
-        free(mtls->internals);
-        mtls->internals = NULL;
-        return TLS_ELIBFAILED;
+        goto err;
     }
     mtls->no_certcheck = no_certcheck;
     mtls->hostname = xstrdup(hostname);
-
-    if (crl_file)
-    {
-        X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK);
-        X509_STORE* store = SSL_CTX_get_cert_store(mtls->internals->ssl_ctx);
-		X509_LOOKUP* lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
-        int type = X509_FILETYPE_ASN1; /* DER */
-        char* pos = strrchr(crl_file, '.');
-        if (pos && 0 == strcasecmp(pos, ".pem")) {
-            type = X509_FILETYPE_PEM;
-        }
-        if (0 == X509_load_crl_file(lookup, crl_file, type)) {
-			*errstr = xasprintf(
-				_("cannot set X509 CRL file %s for TLS session: %s"),
-				crl_file, ERR_error_string(ERR_get_error(), NULL));
-            SSL_free(mtls->internals->ssl);
-            SSL_CTX_free(mtls->internals->ssl_ctx);
-            mtls->internals = NULL;
-            return TLS_ELIBFAILED;
-        }
-    }
-
     return TLS_EOK;
+
+err:
+    SSL_CTX_free(mtls->internals->ssl_ctx);
+    free(mtls->internals);
+    mtls->internals = NULL;
+    return ret;
 }
 
 
