@@ -7,7 +7,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest] #, macos-latest, windows-latest]
+        os: [ubuntu-24.04] #, macos-latest, windows-latest]
     defaults:
       run:
         shell: bash
@@ -28,7 +28,25 @@ jobs:
     - name: 🐧 Install dependencies on Linux
       if: runner.os == 'Linux'
       run: |
-        sudo apt-get install -qq -y -o=Dpkg::Use-Pty=0 libidn2-dev gettext dnsmasq
+        sudo apt-get install -qq -y -o=Dpkg::Use-Pty=0 libidn2-dev gettext dnsmasq stunnel4
+        echo "🚇 Set up stunnel"
+        cat > stunnel.conf <<'EOT'
+        pid = /tmp/stunnel.pid
+        debug = debug
+        output = /tmp/stunnel.log
+        [msmtpd]
+        accept = 127.0.0.1:465
+        cert = ca/certs/revoked.cert.pem
+        key = ca/private/revoked.key.pem
+        CAfile = ca/certs/ca.cert.pem
+        exec = /home/runner/work/msmtp/msmtp/src/msmtpd
+        execArgs = msmtpd --inetd --command=/home/runner/work/msmtp/msmtp/log.sh
+        EOT
+        cat > log.sh <<'EOT'
+        #!/bin/sh
+        dd status=none of=/tmp/msmtpd.log
+        EOT
+        chmod +x log.sh
         echo "🌐 Set up DNS"
         sudo -E bash -c "cat > /etc/dnsmasq.d/msmtp.conf" <<'EOT'
         no-resolv
@@ -40,6 +58,9 @@ jobs:
         domain=test
         host-record=почта.test,127.0.0.1
         host-record=mail.test,127.0.0.1
+        host-record=expired.test,127.0.0.1
+        host-record=revoked.test,127.0.0.1
+        host-record=ocsp.почта.test,127.0.0.1
         mx-host=почта.test,почта.test,10
         srv-host=_submission._tcp.почта.test,почта.test,587,0,5
         srv-host=_submission._tcp.mail.test,mail.test,587,0,5
@@ -55,6 +76,62 @@ jobs:
         sudo systemctl restart systemd-resolved.service
         dig +short +idnin +idnout _submission._tcp.почта.test SRV
         # host -t SRV _submission._tcp.почта.test
+        echo "::group::🔏 Set up PKI"
+        cat > openssl.conf <<'EOT'
+        [ ca ]
+        default_ca = CA_default
+        [ CA_default ]
+        dir=./ca
+        crl_dir          = $dir/crl
+        new_certs_dir    = $dir/newcerts
+        database         = $dir/index.txt
+        serial           = $dir/serial
+        private_key      = $dir/private/ca.key.pem
+        certificate      = $dir/certs/ca.cert.pem
+        crlnumber        = $dir/crlnumber
+        crl              = $dir/crl/ca.crl.pem
+        policy           = policy_default
+        default_days     = 30
+        default_crl_days = 7
+        copy_extensions  = copy
+        #preserve = yes # has no effect to keep commonName with empty policy?
+        [ v3_ca ]
+        basicConstraints       = critical, CA:true
+        [ policy_default ]
+        commonName             = supplied
+        # https://github.com/openssl/openssl/issues/11169
+        [ server_cert ]
+        crlDistributionPoints = URI:http://xn--80a1acny.test/crl
+        authorityInfoAccess   = OCSP;URI:http://ocsp.xn--80a1acny.test
+        [ ocsp ]
+        extendedKeyUsage       = critical, OCSPSigning
+        EOT
+        mkdir ca
+        pushd ca
+        mkdir certs crl csr newcerts private
+        chmod 700 private # || echo "Skip chmod on Windows"
+        touch index.txt
+        echo 1000 > serial
+        echo 1000 > crlnumber
+        popd
+        openssl req -x509 -newkey ed25519 -extensions v3_ca -keyout ca/private/ca.key.pem -out ca/certs/ca.cert.pem -noenc -subj "/CN=Test Root CA"
+        certutil -addstore -enterprise -f -v root ca/certs/ca.cert.pem || echo "Windows only"
+        ## https://github.com/openssl/openssl/issues/11169
+        openssl req -new -newkey ed25519 -keyout ca/private/test.key.pem -noenc -out ca/csr/test.csr.pem -subj "/CN=xn--80a1acny.test" -addext "crlDistributionPoints=URI:http://xn--80a1acny.test/crl" -addext "authorityInfoAccess=OCSP;URI:http://ocsp.xn--80a1acny.test" -addext "tlsfeature=status_request"
+        openssl req -new -newkey ed25519 -keyout ca/private/revoked.key.pem -noenc -out ca/csr/revoked.csr.pem -subj "/CN=revoked.test" -addext "crlDistributionPoints=URI:http://xn--80a1acny.test/crl" -addext "authorityInfoAccess=OCSP;URI:http://ocsp.xn--80a1acny.test" -addext "tlsfeature=status_request_v2"
+        openssl req -new -newkey ed25519 -keyout ca/private/expired.key.pem -noenc -out ca/csr/expired.csr.pem -subj "/CN=expired.test"
+
+        export OPENSSL_CONF=openssl.conf
+        openssl ca -batch -notext -in ca/csr/test.csr.pem -out ca/certs/test.cert.pem
+        openssl ca -batch -notext -in ca/csr/revoked.csr.pem -out ca/certs/revoked.cert.pem
+        openssl ca -crl_reason keyCompromise -revoke ca/certs/revoked.cert.pem
+        openssl ca -batch -startdate 240101000000Z -enddate 240102000000Z -notext -in ca/csr/expired.csr.pem -out ca/certs/expired.cert.pem
+        openssl ca -gencrl -out ca/crl/crl.pem
+        # rfc5280 4.2.1.13
+        openssl crl -in ca/crl/crl.pem -outform DER -out ca/crl/crl
+        openssl req -new -newkey ed25519 -keyout ca/private/ocsp.key.pem -noenc -out ca/csr/ocsp.csr.pem -subj "/CN=ocsp.xn--80a1acny.test"
+        openssl ca -batch -extensions ocsp -notext -in ca/csr/ocsp.csr.pem -out ca/certs/ocsp.cert.pem
+        echo "::endgroup::"
     - name: 🔍 Add MSYS2 to path on Windows
       if: runner.os == 'Windows'
       shell: pwsh
@@ -78,6 +155,19 @@ jobs:
         autoreconf -i
         ./configure --with-tls=openssl --with-libidn CFLAGS=--coverage LDFLAGS=-lgcov
         make
+    - name: 📣 Test OCSP response on Linux
+      if: runner.os == 'Linux'
+      run: |
+        sudo openssl ocsp -text -nmin 60 -port 80 -index ca/index.txt -CA ca/certs/ca.cert.pem -rkey ca/private/ocsp.key.pem -rsigner ca/certs/ocsp.cert.pem >/tmp/ocsp.log 2>&1 &
+        sudo stunnel stunnel.conf
+        ./src/msmtp --serverinfo --tls --port=465 --tls-starttls=off --tls-trust-file=ca/certs/ca.cert.pem --host=revoked.test 2>&1 | tee output.log || true
+        grep -q 'OCSP Cert Status=revoked' output.log && echo "🎉 Success"
+        sudo kill -9 $(</tmp/stunnel.pid)
+        sed -i 's/revoked/test/g' stunnel.conf
+        sudo stunnel stunnel.conf
+        echo Hello | ./src/msmtp --from=root@mail.test --tls --port=465 --tls-starttls=off --tls-trust-file=ca/certs/ca.cert.pem --host=почта.test --tls-priorities=" MaxProtocol=TLSv1.2 " --debug postmaster@почта.test || true
+        grep -q 'Hello' /tmp/msmtpd.log && echo "🎉 Success, message is accepted"
+        grep -q 'TLSv1.2' /tmp/msmtpd.log && echo "🎉 Success, protocol version applied using TLS priorities"
     - name: Test SRV
       if: runner.os == 'Linux'
       run: |
