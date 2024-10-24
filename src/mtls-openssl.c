@@ -363,14 +363,6 @@ int mtls_init(mtls_t *mtls,
                 _("feature not yet implemented for OpenSSL"));
         return TLS_ELIBFAILED;
     }
-    /* FIXME: Implement support for 'priorities' */
-    if (priorities)
-    {
-        *errstr = xasprintf(
-                _("cannot set priorities for TLS session: %s"),
-                _("feature not yet implemented for OpenSSL"));
-        return TLS_ELIBFAILED;
-    }
 
     mtls->internals = xmalloc(sizeof(struct mtls_internals_t));
 
@@ -381,6 +373,48 @@ int mtls_init(mtls_t *mtls,
         free(mtls->internals);
         mtls->internals = NULL;
         return TLS_ELIBFAILED;
+    }
+
+    if (priorities)
+    {
+        SSL_CONF_CTX *cctx = NULL;
+        cctx = SSL_CONF_CTX_new();
+        SSL_CONF_CTX_set_flags(cctx, SSL_CONF_FLAG_CLIENT);
+        SSL_CONF_CTX_set_flags(cctx, SSL_CONF_FLAG_FILE);
+        SSL_CONF_CTX_set_ssl_ctx(cctx, mtls->internals->ssl_ctx);
+
+        char *prio_copy = xstrdup(priorities);
+        const char *end = strchr(prio_copy, 0);
+
+        for (const char *name = prio_copy; name < end;)
+        {
+            for (; *name != 0 && *name == ' '; ++name);
+            char *equals = strchr(name, '=');
+            if (equals)
+            {
+                *equals = 0;
+                char *value = ++equals;
+                char *delim = equals;
+                for (; *delim != 0 && *delim != ' '; ++delim);
+                *delim = 0;
+                int rv = SSL_CONF_cmd(cctx, name, value);
+                if (rv != 2) {
+                    *errstr = xasprintf(
+                        _("cannot set priorities for TLS session: %s"),
+                        ERR_error_string(ERR_get_error(), NULL));
+                    free(prio_copy);
+                    goto err;
+                }
+                name = delim + 1;
+            }
+        }
+        free(prio_copy);
+
+        if (!SSL_CONF_CTX_finish(cctx)) {
+            SSL_CONF_CTX_free(cctx);
+            goto err;
+        }
+        SSL_CONF_CTX_free(cctx);
     }
 
     /* Disable old protocols. */
