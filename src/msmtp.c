@@ -1288,7 +1288,11 @@ int msmtp_read_headers(FILE *mailf, FILE *tmpf,
                 *at = '\0';
                 char *recipient, *idn_domain = NULL;
                 idn2_to_ascii_lz(at + 1, &idn_domain, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
-                recipient = xasprintf("%s@%s", current_recipient, idn_domain);
+                size_t local_size = at - current_recipient;
+                recipient = xmalloc(local_size + strlen(idn_domain) + 2);
+                strcpy(recipient, current_recipient);
+                recipient[local_size] = '@';
+                strcpy(recipient + local_size + 1, idn_domain);
                 free(idn_domain);
                 free(current_recipient);
                 current_recipient = recipient;
