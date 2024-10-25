@@ -165,9 +165,9 @@ jobs:
         sudo kill -9 $(</tmp/stunnel.pid)
         sed -i 's/revoked/test/g' stunnel.conf
         sudo stunnel stunnel.conf
-        echo Hello | ./src/msmtp --from=root@mail.test --tls --port=465 --tls-starttls=off --tls-trust-file=ca/certs/ca.cert.pem --host=почта.test --tls-priorities=" MaxProtocol=TLSv1.2 " --debug postmaster@почта.test || true
+        echo Hello | ./src/msmtp --from=root@mail.test --tls --port=465 --tls-starttls=off --tls-trust-file=ca/certs/ca.cert.pem --host=почта.test --tls-priorities=" MaxProtocol=TLSv1.2 " --debug postmaster@почта.test 2>&1 | tee output.log || true
         grep -q 'Hello' /tmp/msmtpd.log && echo "🎉 Success, message is accepted"
-        grep -q 'TLSv1.2' /tmp/msmtpd.log && echo "🎉 Success, protocol version applied using TLS priorities"
+        grep -q 'TLSv1.2' output.log && echo "🎉 Success, protocol version applied using TLS priorities"
     - name: Test SRV
       if: runner.os == 'Linux'
       run: |
