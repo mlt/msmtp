@@ -54,6 +54,9 @@
 #ifdef HAVE_TLS
 #include "mtls.h"
 #endif /* HAVE_TLS */
+#ifdef HAVE_LIBIDN
+# include <idn2.h>
+#endif /* HAVE_LIBIDN */
 
 
 /* This defines the maximum number of lines in a multiline server reply.
@@ -1673,6 +1676,7 @@ int smtp_send_envelope(smtp_server_t *srv,
         const char *dsn_notify,
         const char *dsn_return,
         list_t **error_msg,
+        int want_eai,
         char **errstr)
 {
     int e;
@@ -1726,15 +1730,38 @@ int smtp_send_envelope(smtp_server_t *srv,
             else if (!list_is_empty(rcpt_send))
             {
                 rcpt_send = rcpt_send->next;
+                char *to = rcpt_send->data;
+#ifdef HAVE_LIBIDN
+                if (RCPT_WANT_PUNYCODE == want_eai && !(srv->cap.flags & SMTP_CAP_SMTPUTF8))
+                {   /* TODO: be selective and check whether particular recipient has IDN? */
+                    char *at = strchr(to, '@');
+                    if (at)
+                    {
+                        *at = '\0';
+                        char *recipient, *idn_domain = NULL;
+                        idn2_to_ascii_lz(at + 1, &idn_domain, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
+                        size_t local_size = at - to;
+                        recipient = xmalloc(local_size + strlen(idn_domain) + 2);
+                        memcpy(recipient, to, local_size);
+                        recipient[local_size] = '@';
+                        strcpy(recipient + local_size + 1, idn_domain);
+                        free(idn_domain);
+                        free(to);
+                        rcpt_send->data = to = recipient;
+                    }
+                }
+#else
+                /* We already failed in msmtp_sendmail() for this case */
+#endif
                 if (dsn_notify)
                 {
                     e = smtp_send_cmd(srv, errstr, "RCPT TO:<%s> NOTIFY=%s",
-                            (char *)(rcpt_send->data), dsn_notify);
+                            to, dsn_notify);
                 }
                 else
                 {
                     e = smtp_send_cmd(srv, errstr, "RCPT TO:<%s>",
-                            (char *)(rcpt_send->data));
+                            to);
                 }
                 if (e != SMTP_EOK)
                 {

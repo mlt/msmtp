@@ -79,6 +79,9 @@
 #define SMTP_CAP_ETRN                    (1 << 18)
 #define SMTP_CAP_SMTPUTF8                (1 << 19)
 
+/* whether recipient has non-ascii in domain part and/or local part */
+#define RCPT_WANT_PUNYCODE                    1
+#define RCPT_WANT_SMTPUTF8                    2
 
 /*
  * This structure describes the capabilities of an SMTP server.
@@ -293,6 +296,8 @@ int smtp_auth(smtp_server_t *srv,
  *                      support SMTP_CAP_DSN.
  * error_msg:           If an error occurs, this will contain the SMTP server
  *                      message (or NULL)
+ * want_eai:            Equals 1=RCPT_WANT_PUNYCODE if we need to transform
+ *                      domain part to ASCII only
  * Used error codes: SMTP_EIO, SMTP_EPROTO, SMTP_EINVAL, SMTP_EUNAVAIL
  */
 int smtp_send_envelope(smtp_server_t *srv,
@@ -301,6 +306,7 @@ int smtp_send_envelope(smtp_server_t *srv,
         const char *dsn_notify,
         const char *dsn_return,
         list_t **error_msg,
+        int want_eai,
         char **errstr);
 
 /*

@@ -682,6 +682,7 @@ int msmtp_read_headers(FILE *mailf, FILE *tmpf,
         char **from,
         int *have_date,
         int *have_msgid,
+        int* want_eai,
         char **errstr)
 {
     int c;
@@ -1286,23 +1287,25 @@ int msmtp_read_headers(FILE *mailf, FILE *tmpf,
         {
             /* The current recipient just ended. Add it to the list */
             current_recipient[current_recipient_len] = '\0';
-#ifdef HAVE_LIBIDN
-            char *at = strchr(current_recipient, '@');
-            if (at)
+            if (*want_eai < 2)
             {
-                *at = '\0';
-                char *recipient, *idn_domain = NULL;
-                idn2_to_ascii_lz(at + 1, &idn_domain, IDN2_NFC_INPUT | IDN2_NONTRANSITIONAL);
-                size_t local_size = at - current_recipient;
-                recipient = xmalloc(local_size + strlen(idn_domain) + 2);
-                strcpy(recipient, current_recipient);
-                recipient[local_size] = '@';
-                strcpy(recipient + local_size + 1, idn_domain);
-                free(idn_domain);
-                free(current_recipient);
-                current_recipient = recipient;
+                char *c;
+                /* precheck whether we need to require SMTPUTF8 ... */
+                for (c = current_recipient; *c != '\0' && *c != '@'; ++c)
+                    if (!isascii(*c))
+                    {
+                        *want_eai = 2;
+                        break;
+                    }
+                if (*c == '@') c++;
+                /* or punycode for domain part would be enough */
+                for (; *c != '\0'; ++c)
+                    if (!isascii(*c))
+                    {
+                        *want_eai = 1;
+                        break;
+                    }
             }
-#endif
             if (from_hdr == 0)
             {
                 *from = current_recipient;
@@ -1435,7 +1438,7 @@ int msmtp_sendmail(account_t *acc, list_t *recipients,
         FILE *header_file, FILE *f,
         int debug, long *mailsize,
         list_t **lmtp_errstrs, list_t **lmtp_error_msgs,
-        list_t **msg, char **errstr)
+        list_t **msg, int want_eai, char **errstr)
 {
     smtp_server_t srv;
     int e;
@@ -1576,6 +1579,17 @@ int msmtp_sendmail(account_t *acc, list_t *recipients,
         }
     }
 #endif /* HAVE_TLS */
+    if ((RCPT_WANT_SMTPUTF8 == want_eai
+#ifndef HAVE_LIBIDN
+        || (RCPT_WANT_PUNYCODE == want_eai)
+#endif
+        ) && !(srv.cap.flags & SMTP_CAP_SMTPUTF8))
+    {
+        *errstr = xasprintf(_("the server does not support SMTPUTF8 required for some recipients"));
+        msmtp_endsession(&srv, 1);
+        e = EX_UNAVAILABLE;
+        return e;
+    }
 
     /* test for needed features */
     if ((acc->dsn_return || acc->dsn_notify) && !(srv.cap.flags & SMTP_CAP_DSN))
@@ -1610,7 +1624,7 @@ int msmtp_sendmail(account_t *acc, list_t *recipients,
 
     /* send the envelope */
     if ((e = smtp_send_envelope(&srv, acc->from, recipients,
-                    acc->dsn_notify, acc->dsn_return, msg, errstr)) != SMTP_EOK)
+                    acc->dsn_notify, acc->dsn_return, msg, want_eai, errstr)) != SMTP_EOK)
     {
         msmtp_endsession(&srv, 0);
         e = smtp_exitcode(e);
@@ -2468,7 +2482,7 @@ typedef struct
 #define LONGONLYOPT_SET_DATE_HEADER             (256 + 40)
 #define LONGONLYOPT_SET_MSGID_HEADER            (256 + 41)
 
-int msmtp_cmdline(msmtp_cmdline_conf_t *conf, int argc, char *argv[])
+int msmtp_cmdline(msmtp_cmdline_conf_t *conf, int argc, char *argv[], int* want_eai)
 {
     struct option options[] =
     {
@@ -3458,7 +3472,7 @@ int msmtp_cmdline(msmtp_cmdline_conf_t *conf, int argc, char *argv[])
         }
         if ((error_code = msmtp_read_headers(tmpf, NULL,
                         list_last(conf->recipients), NULL, NULL, NULL,
-                        &errstr))
+                        want_eai, &errstr))
                 != EX_OK)
         {
             print_error("%s", sanitize_string(errstr));
@@ -3844,6 +3858,7 @@ int main(int argc, char *argv[])
     int have_from_header = 0;
     int have_date_header = 0;
     int have_msgid_header = 0;
+    int want_eai = 0; /* 0-none, 1=RCPT_WANT_PUNYCODE-domain only, 2=RCPT_WANT_SMTPUTF8-needs SMTPUTF8 */
 
 
     /* Avoid the side effects of text mode interpretations on DOS systems. */
@@ -3871,7 +3886,7 @@ int main(int argc, char *argv[])
 #endif
 
     /* the command line */
-    if ((error_code = msmtp_cmdline(&conf, argc, argv)) != EX_OK)
+    if ((error_code = msmtp_cmdline(&conf, argc, argv, &want_eai)) != EX_OK)
     {
         goto exit;
     }
@@ -3923,7 +3938,7 @@ int main(int argc, char *argv[])
                         conf.read_recipients
                             ? list_last(conf.recipients) : NULL,
                         &envelope_from, &have_date_header, &have_msgid_header,
-                        &errstr)) != EX_OK)
+                        &want_eai, &errstr)) != EX_OK)
         {
             print_error("%s", sanitize_string(errstr));
             goto exit;
@@ -4271,7 +4286,7 @@ int main(int argc, char *argv[])
                         header_tmpfile, stdin,
                         conf.debug, &mailsize,
                         &lmtp_errstrs, &lmtp_error_msgs,
-                        &errmsg, &errstr)) != EX_OK)
+                        &errmsg, want_eai, &errstr)) != EX_OK)
         {
             if (account->protocol == SMTP_PROTO_LMTP && lmtp_errstrs)
             {
