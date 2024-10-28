@@ -467,7 +467,7 @@ int mtls_init(mtls_t *mtls,
         }
         if (crl_file)
         {
-            X509_VERIFY_PARAM *param = SSL_get0_param(mtls->internals->ssl);
+            X509_VERIFY_PARAM *param = SSL_CTX_get0_param(mtls->internals->ssl_ctx);
             X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK);
             X509_STORE *store = SSL_CTX_get_cert_store(mtls->internals->ssl_ctx);
             X509_LOOKUP *lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
